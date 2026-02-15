@@ -94,7 +94,7 @@ export default function BudgetScreen() {
     const { data: settingsRows } = await supabase
       .from("studia_budget_settings")
       .select("weekly_budget")
-      .single();
+      .maybeSingle();
     if (settingsRows) setWeeklyBudget(settingsRows.weekly_budget);
 
     const { data: allEntries } = await supabase

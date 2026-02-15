@@ -90,7 +90,7 @@ export default function DashboardScreen() {
     const { data: profile } = await supabase
       .from("studia_profiles")
       .select("display_name")
-      .single();
+      .maybeSingle();
     if (profile?.display_name) setDisplayName(profile.display_name);
 
     const { data: allTasks } = await supabase
@@ -119,13 +119,13 @@ export default function DashboardScreen() {
     const { data: streakData } = await supabase
       .from("studia_streaks")
       .select("current_streak")
-      .single();
+      .maybeSingle();
     const currentStreak = streakData?.current_streak ?? 0;
 
     const { data: settingsData } = await supabase
       .from("studia_budget_settings")
       .select("weekly_budget")
-      .single();
+      .maybeSingle();
     const weeklyBudget = settingsData?.weekly_budget ?? 0;
 
     const { data: weekEntries } = await supabase

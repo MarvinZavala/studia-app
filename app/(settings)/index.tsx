@@ -169,7 +169,7 @@ export default function SettingsScreen() {
     const { data: profile } = await supabase
       .from("studia_profiles")
       .select("display_name")
-      .single();
+      .maybeSingle();
     if (profile?.display_name) setDisplayName(profile.display_name);
 
     try {
@@ -180,7 +180,7 @@ export default function SettingsScreen() {
     const { data: budgetSettings } = await supabase
       .from("studia_budget_settings")
       .select("weekly_budget")
-      .single();
+      .maybeSingle();
     if (budgetSettings) setWeeklyBudget(budgetSettings.weekly_budget);
 
     const { data: sessions } = await supabase
@@ -201,7 +201,7 @@ export default function SettingsScreen() {
     const { data: streak } = await supabase
       .from("studia_streaks")
       .select("current_streak, longest_streak")
-      .single();
+      .maybeSingle();
     setCurrentStreak(streak?.current_streak ?? 0);
     setLongestStreak(streak?.longest_streak ?? 0);
   }

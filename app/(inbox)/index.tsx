@@ -16,18 +16,109 @@ import Animated, {
 } from "react-native-reanimated";
 import { useFocusEffect } from "expo-router";
 import { SymbolView } from "expo-symbols";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Badge, EmptyState } from "@/components/ui";
 import { colors, spacing, radius, font } from "@/lib/theme";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth-context";
+import { createTasksFromInbox } from "@/lib/data/studia-api";
 import {
   parseAssignmentText,
   type ParsedTask,
 } from "@/lib/utils/mock-parser";
 import type { Priority } from "@/lib/types/database";
+
+const BG_COLORS = ["#EEF2FF", "#F3FCFF", "#FFF6EA"] as const;
+
+interface StatPillProps {
+  icon: string;
+  label: string;
+  value: string;
+}
+
+function StatPill({ icon, label, value }: StatPillProps) {
+  return (
+    <View
+      style={{
+        flex: 1,
+        borderRadius: radius.md,
+        borderCurve: "continuous",
+        backgroundColor: "rgba(255,255,255,0.16)",
+        borderWidth: 1,
+        borderColor: "rgba(255,255,255,0.24)",
+        paddingVertical: spacing.sm + 1,
+        paddingHorizontal: spacing.sm,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <SymbolView name={icon as any} size={13} tintColor="rgba(255,255,255,0.88)" />
+        <Text
+          style={{
+            ...font.caption2,
+            color: "rgba(255,255,255,0.76)",
+            textTransform: "uppercase",
+            letterSpacing: 0.7,
+          }}
+        >
+          {label}
+        </Text>
+      </View>
+      <Text
+        selectable
+        style={{
+          ...font.subhead,
+          color: "#FFFFFF",
+          fontWeight: "700",
+          marginTop: 4,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+interface PrimaryButtonProps {
+  title: string;
+  onPress: () => void;
+  disabled?: boolean;
+  icon?: string;
+}
+
+function PrimaryButton({ title, onPress, disabled, icon }: PrimaryButtonProps) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      style={({ pressed }) => ({
+        opacity: disabled ? 0.45 : pressed ? 0.78 : 1,
+      })}
+    >
+      <LinearGradient
+        colors={["#635BFF", "#2E86F5"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={{
+          borderRadius: radius.md,
+          borderCurve: "continuous",
+          paddingVertical: spacing.md + 1,
+          paddingHorizontal: spacing.lg,
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+        }}
+      >
+        {icon ? <SymbolView name={icon as any} size={16} tintColor="#FFFFFF" /> : null}
+        <Text style={{ ...font.subhead, color: "#FFFFFF", fontWeight: "700" }}>{title}</Text>
+      </LinearGradient>
+    </Pressable>
+  );
+}
 
 export default function InboxScreen() {
   const [inputText, setInputText] = useState("");
@@ -106,23 +197,21 @@ export default function InboxScreen() {
 
   async function handleAddToPlanner() {
     if (parsedTasks.length === 0) return;
+    if (!user?.id) {
+      Alert.alert("Session expired", "Please sign in again.");
+      return;
+    }
+
+    try {
+      await createTasksFromInbox(user.id, parsedTasks, inputText);
+    } catch {
+      Alert.alert("Could not add tasks", "Please try again.");
+      return;
+    }
+
     if (process.env.EXPO_OS === "ios") {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
-
-    const rows = parsedTasks.map((task) => ({
-      user_id: user?.id,
-      title: task.title,
-      description: null,
-      deadline: task.deadline,
-      priority: task.priority,
-      estimated_hours: task.estimated_hours,
-      status: "pending",
-      course: task.course,
-      planned_date: null,
-      source_text: inputText,
-    }));
-    await supabase.from("studia_tasks").insert(rows);
 
     setAddedCount(parsedTasks.length);
     setShowSuccess(true);
@@ -140,15 +229,17 @@ export default function InboxScreen() {
   }) {
     return (
       <Animated.View
-        entering={FadeInDown.delay(index * 70).duration(300)}
-        exiting={FadeOut.duration(200)}
-        layout={LinearTransition.duration(250)}
+        entering={FadeInDown.delay(index * 60).duration(280)}
+        exiting={FadeOut.duration(180)}
+        layout={LinearTransition.duration(240)}
       >
         <View
           style={{
-            backgroundColor: colors.surface,
-            borderRadius: radius.md,
+            backgroundColor: "#FFFFFF",
+            borderRadius: radius.lg,
             borderCurve: "continuous",
+            borderWidth: 1,
+            borderColor: "#E6EBFF",
             padding: spacing.lg,
             marginBottom: spacing.sm,
           }}
@@ -166,17 +257,20 @@ export default function InboxScreen() {
               onChangeText={(v) => handleUpdateTask(index, "title", v)}
               style={{
                 ...font.subhead,
-                fontWeight: "600",
+                fontWeight: "700",
                 flex: 1,
                 color: colors.textPrimary,
                 padding: 0,
                 marginRight: spacing.sm,
+                lineHeight: 21,
               }}
               multiline
             />
             <Pressable
               onPress={() => handleRemoveTask(index)}
               hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Remove task"
               style={{ padding: 4 }}
             >
               <SymbolView
@@ -191,37 +285,41 @@ export default function InboxScreen() {
             style={{
               flexDirection: "row",
               alignItems: "center",
-              gap: spacing.sm,
+              justifyContent: "space-between",
               marginBottom: spacing.md,
             }}
           >
-            <Pressable onPress={() => handleCyclePriority(index)}>
+            <Pressable
+              onPress={() => handleCyclePriority(index)}
+              accessibilityRole="button"
+              accessibilityLabel="Change priority"
+            >
               <Badge priority={item.priority} />
             </Pressable>
 
-            {item.deadline && (
+            {item.deadline ? (
               <View
                 style={{
                   flexDirection: "row",
                   alignItems: "center",
                   gap: 4,
+                  backgroundColor: "#EDF4FF",
+                  borderRadius: radius.sm,
+                  borderCurve: "continuous",
+                  paddingHorizontal: 8,
+                  paddingVertical: 4,
                 }}
               >
                 <SymbolView
                   name="calendar"
-                  size={13}
-                  tintColor={colors.textSecondary}
+                  size={12}
+                  tintColor={colors.primary}
                 />
-                <Text
-                  style={{
-                    ...font.caption1,
-                    color: colors.textSecondary,
-                  }}
-                >
+                <Text style={{ ...font.caption1, color: colors.primary, fontWeight: "600" }}>
                   {new Date(item.deadline).toLocaleDateString()}
                 </Text>
               </View>
-            )}
+            ) : null}
           </View>
 
           <View style={{ flexDirection: "row", gap: spacing.sm }}>
@@ -229,57 +327,84 @@ export default function InboxScreen() {
               <Text
                 style={{
                   ...font.caption2,
-                  color: colors.textTertiary,
+                  color: colors.textSecondary,
                   textTransform: "uppercase",
-                  marginBottom: 4,
+                  marginBottom: 6,
+                  letterSpacing: 0.7,
                 }}
               >
                 Course
               </Text>
-              <TextInput
-                value={item.course ?? ""}
-                onChangeText={(v) => handleUpdateTask(index, "course", v)}
-                placeholder="e.g. CS 201"
-                placeholderTextColor={colors.textTertiary}
+              <View
                 style={{
-                  ...font.footnote,
-                  color: colors.textPrimary,
-                  backgroundColor: colors.surfaceSecondary,
+                  backgroundColor: "#F0F5FF",
                   borderRadius: radius.sm,
                   borderCurve: "continuous",
-                  paddingVertical: 8,
+                  borderWidth: 1,
+                  borderColor: "#DEE8FF",
+                  flexDirection: "row",
+                  alignItems: "center",
                   paddingHorizontal: spacing.md,
+                  gap: 8,
                 }}
-              />
+              >
+                <SymbolView name="book.closed" size={13} tintColor={colors.primary} />
+                <TextInput
+                  value={item.course ?? ""}
+                  onChangeText={(v) => handleUpdateTask(index, "course", v)}
+                  placeholder="e.g. CS 201"
+                  placeholderTextColor={colors.textTertiary}
+                  style={{
+                    ...font.footnote,
+                    color: colors.textPrimary,
+                    paddingVertical: 9,
+                    flex: 1,
+                  }}
+                />
+              </View>
             </View>
-            <View style={{ width: 80 }}>
+
+            <View style={{ width: 94 }}>
               <Text
                 style={{
                   ...font.caption2,
-                  color: colors.textTertiary,
+                  color: colors.textSecondary,
                   textTransform: "uppercase",
-                  marginBottom: 4,
+                  marginBottom: 6,
+                  letterSpacing: 0.7,
                 }}
               >
                 Hours
               </Text>
-              <TextInput
-                value={String(item.estimated_hours)}
-                onChangeText={(v) =>
-                  handleUpdateTask(index, "estimated_hours", v)
-                }
-                keyboardType="decimal-pad"
+              <View
                 style={{
-                  ...font.footnote,
-                  color: colors.textPrimary,
-                  backgroundColor: colors.surfaceSecondary,
+                  backgroundColor: "#FFF4E5",
                   borderRadius: radius.sm,
                   borderCurve: "continuous",
-                  paddingVertical: 8,
-                  paddingHorizontal: spacing.md,
-                  fontVariant: ["tabular-nums"],
+                  borderWidth: 1,
+                  borderColor: "#FFE3BC",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  paddingHorizontal: spacing.sm,
+                  gap: 6,
                 }}
-              />
+              >
+                <SymbolView name="clock.fill" size={12} tintColor={colors.warning} />
+                <TextInput
+                  value={String(item.estimated_hours)}
+                  onChangeText={(v) =>
+                    handleUpdateTask(index, "estimated_hours", v)
+                  }
+                  keyboardType="decimal-pad"
+                  style={{
+                    ...font.footnote,
+                    color: colors.textPrimary,
+                    paddingVertical: 9,
+                    flex: 1,
+                    fontVariant: ["tabular-nums"],
+                  }}
+                />
+              </View>
             </View>
           </View>
         </View>
@@ -288,193 +413,268 @@ export default function InboxScreen() {
   }
 
   return (
-    <ScrollView
-      contentInsetAdjustmentBehavior="automatic"
-      style={{ flex: 1, backgroundColor: colors.background }}
-      contentContainerStyle={{
-        paddingHorizontal: spacing.lg,
-        paddingBottom: 100,
-      }}
-      keyboardShouldPersistTaps="handled"
-    >
-      {/* Success banner */}
-      {showSuccess && (
-        <Animated.View
-          entering={FadeIn.duration(400)}
-          exiting={FadeOut.duration(300)}
-          style={{
-            backgroundColor: colors.successLight,
-            borderRadius: radius.md,
-            borderCurve: "continuous",
-            padding: spacing.xl,
-            alignItems: "center",
-            marginTop: spacing.lg,
-            marginBottom: spacing.lg,
-          }}
-        >
-          <SymbolView
-            name="checkmark.circle.fill"
-            size={48}
-            tintColor={colors.success}
-          />
-          <Text
-            style={{
-              ...font.title3,
-              color: colors.success,
-              marginTop: spacing.md,
-            }}
-          >
-            Tasks Added!
-          </Text>
-          <Text
-            selectable
-            style={{
-              ...font.subhead,
-              color: colors.textSecondary,
-              marginTop: spacing.xs,
-            }}
-          >
-            {addedCount} task{addedCount !== 1 ? "s" : ""} added to your
-            planner.
-          </Text>
-        </Animated.View>
-      )}
+    <View style={{ flex: 1, backgroundColor: "#EDF2FF" }}>
+      <LinearGradient
+        colors={BG_COLORS}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={{ position: "absolute", inset: 0 }}
+      />
 
-      {/* Input card */}
-      <View
-        style={{
-          backgroundColor: colors.surface,
-          borderRadius: radius.md,
-          borderCurve: "continuous",
-          padding: spacing.lg,
-          marginTop: spacing.lg,
-          marginBottom: spacing.lg,
+      <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
+        style={{ flex: 1 }}
+        contentContainerStyle={{
+          paddingHorizontal: spacing.lg,
+          paddingBottom: 110,
+          paddingTop: spacing.sm,
         }}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            gap: spacing.sm,
-            marginBottom: spacing.md,
-          }}
-        >
-          <SymbolView
-            name="doc.text.magnifyingglass"
-            size={20}
-            tintColor={colors.primary}
-          />
-          <Text
+        <Animated.View entering={FadeIn.duration(320)}>
+          <LinearGradient
+            colors={["#614FF8", "#327FF8", "#15B5FF"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
             style={{
-              ...font.headline,
-              color: colors.textPrimary,
+              borderRadius: radius.xl,
+              borderCurve: "continuous",
+              padding: spacing.lg,
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.3)",
+              overflow: "hidden",
             }}
           >
-            Paste Assignment Text
-          </Text>
-        </View>
+            <View
+              style={{
+                position: "absolute",
+                width: 150,
+                height: 150,
+                right: -26,
+                top: -56,
+                borderRadius: 75,
+                backgroundColor: "rgba(255,255,255,0.14)",
+              }}
+            />
 
-        <TextInput
-          value={inputText}
-          onChangeText={setInputText}
-          placeholder={
-            "Paste your syllabus, assignment list, or course schedule here...\n\nExample:\n1. Read Chapter 5 \u2014 due March 15\n2. Submit essay on climate policy\n3. Midterm exam review"
-          }
-          placeholderTextColor={colors.textTertiary}
-          multiline
-          textAlignVertical="top"
-          style={{
-            minHeight: 140,
-            ...font.subhead,
-            color: colors.textPrimary,
-            backgroundColor: colors.surfaceSecondary,
-            borderRadius: radius.md,
-            borderCurve: "continuous",
-            padding: spacing.lg,
-            marginBottom: spacing.md,
-            lineHeight: 22,
-          }}
-        />
+            <Text style={{ ...font.title2, color: "#FFFFFF", fontWeight: "800" }}>
+              Smart Capture
+            </Text>
+            <Text
+              style={{
+                ...font.subhead,
+                color: "rgba(255,255,255,0.82)",
+                marginTop: 4,
+                lineHeight: 20,
+              }}
+            >
+              Paste your assignments, extract structured tasks, and push them
+              directly into your planner.
+            </Text>
 
-        <Button
-          title="Extract Tasks"
-          onPress={handleExtract}
-          disabled={!inputText.trim()}
-        />
-      </View>
-
-      {/* Empty parse */}
-      {hasParsed && parsedTasks.length === 0 && !showSuccess && (
-        <Animated.View
-          entering={FadeIn.duration(300)}
-          style={{ alignItems: "center", padding: spacing.xl }}
-        >
-          <SymbolView
-            name="doc.questionmark"
-            size={40}
-            tintColor={colors.textTertiary}
-          />
-          <Text
-            style={{
-              ...font.subhead,
-              color: colors.textSecondary,
-              marginTop: spacing.md,
-              textAlign: "center",
-            }}
-          >
-            No tasks could be extracted.{"\n"}Try pasting a different format.
-          </Text>
+            <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
+              <StatPill
+                icon="text.alignleft"
+                label="Input"
+                value={`${inputText.trim().length} chars`}
+              />
+              <StatPill
+                icon="sparkles"
+                label="Detected"
+                value={`${parsedTasks.length} tasks`}
+              />
+              <StatPill
+                icon="checkmark.circle"
+                label="Added"
+                value={`${addedCount}`}
+              />
+            </View>
+          </LinearGradient>
         </Animated.View>
-      )}
 
-      {/* Parsed tasks list */}
-      {parsedTasks.length > 0 && (
+        {showSuccess ? (
+          <Animated.View
+            entering={FadeInDown.delay(40).duration(300)}
+            exiting={FadeOut.duration(220)}
+            style={{
+              backgroundColor: "#E8FBEF",
+              borderRadius: radius.lg,
+              borderCurve: "continuous",
+              borderWidth: 1,
+              borderColor: "#CFEFDB",
+              padding: spacing.lg,
+              marginTop: spacing.md,
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+              <SymbolView name="checkmark.seal.fill" size={26} tintColor={colors.success} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ ...font.subhead, color: colors.success, fontWeight: "800" }}>
+                  Tasks Added Successfully
+                </Text>
+                <Text style={{ ...font.caption1, color: colors.textSecondary, marginTop: 2 }}>
+                  {addedCount} task{addedCount !== 1 ? "s" : ""} moved to planner.
+                </Text>
+              </View>
+            </View>
+          </Animated.View>
+        ) : null}
+
         <Animated.View
-          entering={FadeIn.duration(300)}
-          layout={LinearTransition.duration(250)}
+          entering={FadeInDown.delay(80).duration(320)}
+          style={{ marginTop: spacing.md }}
         >
           <View
             style={{
-              flexDirection: "row",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: spacing.md,
+              backgroundColor: "#FFFFFF",
+              borderRadius: radius.lg,
+              borderCurve: "continuous",
+              borderWidth: 1,
+              borderColor: "#E4EAFF",
+              padding: spacing.lg,
             }}
           >
-            <Text
+            <View
               style={{
-                ...font.title3,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: spacing.md,
+              }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+                <View
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 11,
+                    borderCurve: "continuous",
+                    backgroundColor: "#ECE8FF",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <SymbolView name="doc.text.magnifyingglass" size={16} tintColor={colors.primary} />
+                </View>
+                <View>
+                  <Text style={{ ...font.subhead, color: colors.textPrimary, fontWeight: "700" }}>
+                    Paste Assignment Text
+                  </Text>
+                  <Text style={{ ...font.caption1, color: colors.textSecondary, marginTop: 1 }}>
+                    Syllabus, tasks, or exam notes
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            <TextInput
+              value={inputText}
+              onChangeText={setInputText}
+              placeholder={
+                "Paste your syllabus, assignment list, or course schedule here...\n\nExample:\n1. Read Chapter 5 — due March 15\n2. Submit essay on climate policy\n3. Midterm exam review"
+              }
+              placeholderTextColor={colors.textTertiary}
+              multiline
+              textAlignVertical="top"
+              style={{
+                minHeight: 160,
+                ...font.subhead,
                 color: colors.textPrimary,
+                backgroundColor: "#F2F6FF",
+                borderRadius: radius.md,
+                borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: "#DEE7FF",
+                padding: spacing.lg,
+                marginBottom: spacing.md,
+                lineHeight: 22,
               }}
-            >
-              Extracted Tasks
-            </Text>
-            <Text
-              style={{
-                ...font.footnote,
-                color: colors.textSecondary,
-                fontVariant: ["tabular-nums"],
-              }}
-            >
-              {parsedTasks.length} task{parsedTasks.length !== 1 ? "s" : ""}
-            </Text>
+            />
+
+            <PrimaryButton
+              title="Extract Tasks"
+              onPress={handleExtract}
+              disabled={!inputText.trim()}
+              icon="sparkles"
+            />
           </View>
-
-          <FlatList
-            data={parsedTasks}
-            renderItem={renderTaskItem}
-            keyExtractor={(_, i) => `parsed-${i}`}
-            scrollEnabled={false}
-          />
-
-          <Button
-            title={`Add ${parsedTasks.length} Task${parsedTasks.length !== 1 ? "s" : ""} to Planner`}
-            size="lg"
-            onPress={handleAddToPlanner}
-            style={{ marginTop: spacing.sm }}
-          />
         </Animated.View>
-      )}
-    </ScrollView>
+
+        {hasParsed && parsedTasks.length === 0 && !showSuccess ? (
+          <Animated.View
+            entering={FadeIn.duration(260)}
+            style={{ marginTop: spacing.lg }}
+          >
+            <EmptyState
+              icon="doc.questionmark"
+              title="No tasks were extracted"
+              subtitle="Try a clearer format with action verbs and dates."
+            />
+          </Animated.View>
+        ) : null}
+
+        {parsedTasks.length > 0 ? (
+          <Animated.View
+            entering={FadeIn.duration(280)}
+            layout={LinearTransition.duration(230)}
+            style={{ marginTop: spacing.lg }}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: spacing.md,
+              }}
+            >
+              <View>
+                <Text style={{ ...font.title3, color: colors.textPrimary, fontWeight: "700" }}>
+                  Review Extracted Tasks
+                </Text>
+                <Text style={{ ...font.caption1, color: colors.textSecondary, marginTop: 2 }}>
+                  Edit title, priority, hours, and course before importing
+                </Text>
+              </View>
+              <View
+                style={{
+                  backgroundColor: "#EDF4FF",
+                  borderRadius: radius.full,
+                  borderCurve: "continuous",
+                  paddingHorizontal: 10,
+                  paddingVertical: 5,
+                }}
+              >
+                <Text
+                  style={{
+                    ...font.footnote,
+                    color: colors.primary,
+                    fontWeight: "700",
+                    fontVariant: ["tabular-nums"],
+                  }}
+                >
+                  {parsedTasks.length}
+                </Text>
+              </View>
+            </View>
+
+            <FlatList
+              data={parsedTasks}
+              renderItem={renderTaskItem}
+              keyExtractor={(_, i) => `parsed-${i}`}
+              scrollEnabled={false}
+            />
+
+            <View style={{ marginTop: spacing.sm }}>
+              <PrimaryButton
+                title={`Add ${parsedTasks.length} Task${parsedTasks.length !== 1 ? "s" : ""} to Planner`}
+                onPress={handleAddToPlanner}
+                icon="arrow.down.doc.fill"
+              />
+            </View>
+          </Animated.View>
+        ) : null}
+      </ScrollView>
+    </View>
   );
 }

@@ -1,178 +1,348 @@
-import { ScrollView, View, Text, Pressable, useWindowDimensions } from "react-native";
-import { Link, useRouter, useFocusEffect } from "expo-router";
+import { useCallback } from "react";
+import { ScrollView, View, Text, Pressable, Alert } from "react-native";
+import { Link, useFocusEffect } from "expo-router";
 import Animated, {
-  FadeInDown,
   FadeIn,
-  LinearTransition,
+  FadeInDown,
   FadeOut,
+  LinearTransition,
 } from "react-native-reanimated";
 import { SymbolView } from "expo-symbols";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import { useCallback, useState } from "react";
+
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { colors, spacing, radius, font } from "@/lib/theme";
 import { useAuth } from "@/lib/auth-context";
-import { supabase } from "@/lib/supabase";
-import type { Task, StudySession } from "@/lib/types/database";
+import { useDashboardData } from "@/lib/features/dashboard/use-dashboard-data";
+import {
+  formatDuration,
+  formatRelativeDate,
+  getGreeting,
+} from "@/lib/features/dashboard/formatters";
 
-function getGreeting(): string {
-  const hour = new Date().getHours();
-  if (hour < 12) return "Good morning";
-  if (hour < 17) return "Good afternoon";
-  return "Good evening";
+const SCREEN_BG = ["#EEF3FF", "#F5FBFF", "#FFF8EF"] as const;
+
+type DashboardHref =
+  | "/(home)/planner"
+  | "/(home)/tutor"
+  | "/(home)/wellness"
+  | "/(study)"
+  | "/(inbox)"
+  | "/(budget)"
+  | "/(settings)";
+
+const priorityConfig: Record<
+  string,
+  {
+    icon: string;
+    color: string;
+    bg: string;
+  }
+> = {
+  high: {
+    icon: "exclamationmark.circle.fill",
+    color: colors.danger,
+    bg: "#FFE8E8",
+  },
+  medium: {
+    icon: "minus.circle.fill",
+    color: colors.warning,
+    bg: "#FFF1DE",
+  },
+  low: {
+    icon: "arrow.down.circle.fill",
+    color: colors.primary,
+    bg: "#ECE8FF",
+  },
+};
+
+interface HeroPillProps {
+  icon: string;
+  label: string;
+  value: string;
 }
 
-function getToday(): string {
-  return new Date().toISOString().split("T")[0];
+interface ActionPillProps {
+  label: string;
+  icon: string;
+  href: DashboardHref;
+  onPress: () => void;
 }
 
-function formatDuration(minutes: number): string {
-  if (minutes < 1) return "0m";
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  if (h > 0 && m > 0) return `${h}h ${m}m`;
-  if (h > 0) return `${h}h`;
-  return `${m}m`;
+function ActionPill({ label, icon, href, onPress }: ActionPillProps) {
+  return (
+    <Link href={href} asChild>
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${label}`}
+        style={({ pressed }) => ({
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 6,
+          paddingHorizontal: spacing.md,
+          paddingVertical: 10,
+          minHeight: 44,
+          borderRadius: radius.full,
+          borderCurve: "continuous",
+          backgroundColor: "#FFFFFF",
+          borderWidth: 1,
+          borderColor: "#E3E9FF",
+          opacity: pressed ? 0.72 : 1,
+        })}
+      >
+        <SymbolView name={icon as any} size={13} tintColor={colors.primary} />
+        <Text style={{ ...font.caption1, color: colors.primary, fontWeight: "700" }}>
+          {label}
+        </Text>
+      </Pressable>
+    </Link>
+  );
 }
 
-function formatRelativeDate(isoDate: string): string {
-  const date = new Date(isoDate);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  if (diffHours < 1) return "Just now";
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays === 1) return "Yesterday";
-  return `${diffDays}d ago`;
+function HeroPill({ icon, label, value }: HeroPillProps) {
+  return (
+    <View
+      style={{
+        flex: 1,
+        borderRadius: radius.md,
+        borderCurve: "continuous",
+        backgroundColor: "rgba(255,255,255,0.17)",
+        borderWidth: 1,
+        borderColor: "rgba(255,255,255,0.24)",
+        paddingVertical: spacing.sm + 2,
+        paddingHorizontal: spacing.sm,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <SymbolView name={icon as any} size={13} tintColor="rgba(255,255,255,0.92)" />
+        <Text
+          style={{
+            ...font.caption2,
+            color: "rgba(255,255,255,0.78)",
+            textTransform: "uppercase",
+            letterSpacing: 0.7,
+          }}
+        >
+          {label}
+        </Text>
+      </View>
+      <Text
+        selectable
+        style={{
+          ...font.subhead,
+          color: "#FFFFFF",
+          fontWeight: "700",
+          marginTop: 4,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {value}
+      </Text>
+    </View>
+  );
 }
 
-interface DashboardData {
-  tasksDueToday: number;
-  tasksCompleted: number;
-  totalTasks: number;
-  studyStreak: number;
-  budgetSpent: number;
-  weeklyBudget: number;
-  weeklyStudyMinutes: number;
-  todayStudyMinutes: number;
+interface SectionHeadingProps {
+  title: string;
+  subtitle?: string;
+  actionLabel?: string;
+  actionHref?: DashboardHref;
+  onActionPress?: () => void;
+}
+
+function SectionHeading({
+  title,
+  subtitle,
+  actionLabel,
+  actionHref,
+  onActionPress,
+}: SectionHeadingProps) {
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        marginBottom: spacing.md,
+      }}
+    >
+      <View style={{ flex: 1, marginRight: spacing.sm }}>
+        <Text style={{ ...font.title3, color: colors.textPrimary, fontWeight: "700" }}>
+          {title}
+        </Text>
+        {subtitle ? (
+          <Text
+            style={{
+              ...font.caption1,
+              color: colors.textSecondary,
+              marginTop: 2,
+            }}
+          >
+            {subtitle}
+          </Text>
+        ) : null}
+      </View>
+
+      {actionLabel && actionHref ? (
+        <Link href={actionHref} asChild>
+          <Pressable
+            onPress={onActionPress}
+            accessibilityRole="button"
+            accessibilityLabel={actionLabel}
+            hitSlop={8}
+            style={({ pressed }) => ({
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 4,
+              opacity: pressed ? 0.65 : 1,
+            })}
+          >
+            <Text
+              style={{
+                ...font.subhead,
+                color: colors.primary,
+                fontWeight: "600",
+              }}
+            >
+              {actionLabel}
+            </Text>
+            <SymbolView name="chevron.right" size={12} tintColor={colors.primary} />
+          </Pressable>
+        </Link>
+      ) : null}
+    </View>
+  );
+}
+
+interface ToolCardProps {
+  title: string;
+  subtitle: string;
+  cta: string;
+  icon: string;
+  colors: readonly [string, string];
+  href: DashboardHref;
+  onPress: () => void;
+}
+
+function ToolCard({
+  title,
+  subtitle,
+  cta,
+  icon,
+  colors: cardColors,
+  href,
+  onPress,
+}: ToolCardProps) {
+  return (
+    <Link href={href} asChild>
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${title}`}
+        style={({ pressed }) => ({
+          width: 246,
+          opacity: pressed ? 0.78 : 1,
+          transform: [{ scale: pressed ? 0.98 : 1 }],
+        })}
+      >
+        <LinearGradient
+          colors={cardColors}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{
+            minHeight: 156,
+            borderRadius: radius.lg,
+            borderCurve: "continuous",
+            padding: spacing.lg,
+            justifyContent: "space-between",
+            overflow: "hidden",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.26)",
+          }}
+        >
+          <View
+            style={{
+              position: "absolute",
+              width: 120,
+              height: 120,
+              borderRadius: 60,
+              right: -25,
+              top: -30,
+              backgroundColor: "rgba(255,255,255,0.13)",
+            }}
+          />
+          <View
+            style={{
+              position: "absolute",
+              width: 90,
+              height: 90,
+              borderRadius: 45,
+              right: 36,
+              bottom: -48,
+              backgroundColor: "rgba(255,255,255,0.08)",
+            }}
+          />
+          <View
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 12,
+              borderCurve: "continuous",
+              backgroundColor: "rgba(255,255,255,0.2)",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <SymbolView name={icon as any} size={18} tintColor="#FFFFFF" />
+          </View>
+          <View>
+            <Text
+              style={{
+                ...font.caption1,
+                color: "rgba(255,255,255,0.82)",
+                textTransform: "uppercase",
+                letterSpacing: 0.5,
+              }}
+            >
+              {subtitle}
+            </Text>
+            <Text style={{ ...font.headline, color: "#FFFFFF", fontWeight: "700", marginTop: 2 }}>
+              {title}
+            </Text>
+            <View
+              style={{
+                alignSelf: "flex-start",
+                marginTop: spacing.sm,
+                borderRadius: radius.full,
+                borderCurve: "continuous",
+                paddingHorizontal: 10,
+                paddingVertical: 4,
+                backgroundColor: "rgba(255,255,255,0.18)",
+              }}
+            >
+              <Text style={{ ...font.caption2, color: "#FFFFFF", fontWeight: "700" }}>{cta}</Text>
+            </View>
+          </View>
+        </LinearGradient>
+      </Pressable>
+    </Link>
+  );
 }
 
 export default function DashboardScreen() {
   const { user } = useAuth();
-  const router = useRouter();
-  const { width } = useWindowDimensions();
-  const [displayName, setDisplayName] = useState("Student");
-  const [data, setData] = useState<DashboardData>({
-    tasksDueToday: 0,
-    tasksCompleted: 0,
-    totalTasks: 0,
-    studyStreak: 0,
-    budgetSpent: 0,
-    weeklyBudget: 0,
-    weeklyStudyMinutes: 0,
-    todayStudyMinutes: 0,
-  });
-  const [recentSessions, setRecentSessions] = useState<StudySession[]>([]);
-  const [todayTasks, setTodayTasks] = useState<Task[]>([]);
+  const { displayName, data, recentSessions, todayTasks, loadData, completeTask } =
+    useDashboardData(user?.id);
 
   useFocusEffect(
     useCallback(() => {
       if (!user) return;
       loadData();
-    }, [user])
+    }, [user, loadData])
   );
-
-  async function loadData() {
-    const today = getToday();
-    const now = new Date();
-
-    const { data: profile } = await supabase
-      .from("studia_profiles")
-      .select("display_name")
-      .maybeSingle();
-    if (profile?.display_name) setDisplayName(profile.display_name);
-
-    const { data: allTasks } = await supabase
-      .from("studia_tasks")
-      .select("*")
-      .neq("status", "completed");
-    const pendingTasks = allTasks ?? [];
-
-    const dueToday = pendingTasks.filter(
-      (t: any) => t.planned_date === today || t.deadline === today
-    );
-    setTodayTasks(dueToday.slice(0, 5) as Task[]);
-
-    const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - now.getDay());
-    weekStart.setHours(0, 0, 0, 0);
-    const weekStartStr = weekStart.toISOString().split("T")[0];
-
-    const { data: completedTasks } = await supabase
-      .from("studia_tasks")
-      .select("id")
-      .eq("status", "completed")
-      .gte("updated_at", weekStart.toISOString());
-    const completedCount = completedTasks?.length ?? 0;
-
-    const { data: streakData } = await supabase
-      .from("studia_streaks")
-      .select("current_streak")
-      .maybeSingle();
-    const currentStreak = streakData?.current_streak ?? 0;
-
-    const { data: settingsData } = await supabase
-      .from("studia_budget_settings")
-      .select("weekly_budget")
-      .maybeSingle();
-    const weeklyBudget = settingsData?.weekly_budget ?? 0;
-
-    const { data: weekEntries } = await supabase
-      .from("studia_budget_entries")
-      .select("amount")
-      .eq("entry_type", "expense")
-      .gte("date", weekStartStr);
-    const weekExpenses = (weekEntries ?? []).reduce(
-      (sum: number, e: any) => sum + Number(e.amount),
-      0
-    );
-
-    const { data: weekSessions } = await supabase
-      .from("studia_study_sessions")
-      .select("*")
-      .gte("started_at", weekStart.toISOString())
-      .order("started_at", { ascending: false });
-    const sessions = (weekSessions ?? []) as StudySession[];
-    const weeklyMins = sessions.reduce(
-      (sum, s) => sum + (s.duration_minutes ?? 0),
-      0
-    );
-
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-    const todayMins = sessions
-      .filter((s) => new Date(s.started_at) >= todayStart)
-      .reduce((sum, s) => sum + (s.duration_minutes ?? 0), 0);
-
-    setData({
-      tasksDueToday: dueToday.length,
-      tasksCompleted: completedCount,
-      totalTasks: pendingTasks.length + completedCount,
-      studyStreak: currentStreak,
-      budgetSpent: weekExpenses,
-      weeklyBudget,
-      weeklyStudyMinutes: weeklyMins,
-      todayStudyMinutes: todayMins,
-    });
-
-    const { data: recentData } = await supabase
-      .from("studia_study_sessions")
-      .select("*")
-      .order("started_at", { ascending: false })
-      .limit(3);
-    setRecentSessions((recentData ?? []) as StudySession[]);
-  }
 
   const handleHaptic = () => {
     if (process.env.EXPO_OS === "ios") {
@@ -184,16 +354,11 @@ export default function DashboardScreen() {
     if (process.env.EXPO_OS === "ios") {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
-    await supabase
-      .from("studia_tasks")
-      .update({ status: "completed" })
-      .eq("id", taskId);
-    setTodayTasks((prev) => prev.filter((t) => t.id !== taskId));
-    setData((prev) => ({
-      ...prev,
-      tasksDueToday: Math.max(0, prev.tasksDueToday - 1),
-      tasksCompleted: prev.tasksCompleted + 1,
-    }));
+
+    const ok = await completeTask(taskId);
+    if (!ok) {
+      Alert.alert("Could not update task", "Please try again.");
+    }
   }
 
   const budgetRemaining = data.weeklyBudget - data.budgetSpent;
@@ -204,818 +369,556 @@ export default function DashboardScreen() {
   const isOverBudget = budgetRemaining < 0;
 
   const studyGoalMinutes = 14 * 60;
-  const studyPct = Math.min(
-    (data.weeklyStudyMinutes / studyGoalMinutes) * 100,
-    100
-  );
+  const studyPct = Math.min((data.weeklyStudyMinutes / studyGoalMinutes) * 100, 100);
 
-  const priorityConfig: Record<
-    string,
-    { icon: string; color: string; bg: string }
-  > = {
-    high: {
-      icon: "exclamationmark.circle.fill",
-      color: colors.danger,
-      bg: colors.dangerLight,
-    },
-    medium: {
-      icon: "minus.circle.fill",
-      color: colors.warning,
-      bg: colors.warningLight,
-    },
-    low: {
-      icon: "arrow.down.circle.fill",
-      color: colors.primary,
-      bg: colors.primaryLight,
-    },
-  };
+  const todayFocusValue = data.todayStudyMinutes > 0 ? formatDuration(data.todayStudyMinutes) : "0m";
+  const pendingTasks = Math.max(0, data.totalTasks - data.tasksCompleted);
 
   return (
-    <ScrollView
-      contentInsetAdjustmentBehavior="automatic"
-      style={{ flex: 1, backgroundColor: colors.background }}
-      contentContainerStyle={{ paddingBottom: 40 }}
-      showsVerticalScrollIndicator={false}
-    >
-      {/* ── Greeting ────────────────────────────────────────── */}
-      <Animated.View
-        entering={FadeInDown.delay(0).duration(400)}
-        style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.sm }}
-      >
-        <Text
-          style={{
-            ...font.title1,
-            color: colors.textPrimary,
-            marginBottom: 2,
-          }}
-        >
-          {getGreeting()}, {displayName}
-        </Text>
-        <Text
-          style={{
-            ...font.subhead,
-            color: colors.textSecondary,
-            marginBottom: spacing.xl,
-          }}
-        >
-          {new Date().toLocaleDateString("en-US", {
-            weekday: "long",
-            month: "long",
-            day: "numeric",
-          })}
-        </Text>
-      </Animated.View>
+    <View style={{ flex: 1, backgroundColor: "#EFF3FF" }}>
+      <LinearGradient
+        colors={SCREEN_BG}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={{ position: "absolute", inset: 0 }}
+      />
 
-      {/* ── Streak Banner ───────────────────────────────────── */}
-      <Animated.View
-        entering={FadeInDown.delay(50).duration(400)}
-        style={{ paddingHorizontal: spacing.lg, marginBottom: spacing.lg }}
-      >
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            backgroundColor: "#FF9F0A",
-            borderRadius: radius.lg,
-            borderCurve: "continuous",
-            padding: spacing.lg,
-            gap: spacing.md,
-            boxShadow: "0 4px 16px rgba(255, 159, 10, 0.3)",
-          }}
-        >
-          <View
-            style={{
-              width: 52,
-              height: 52,
-              borderRadius: 16,
-              borderCurve: "continuous",
-              backgroundColor: "rgba(255,255,255,0.25)",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <SymbolView name="flame.fill" size={28} tintColor="#FFFFFF" />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text
-              style={{
-                fontSize: 13,
-                fontWeight: "600",
-                color: "rgba(255,255,255,0.8)",
-                marginBottom: 2,
-              }}
-            >
-              Daily streak
-            </Text>
-            <Text
-              selectable
-              style={{
-                fontSize: 28,
-                fontWeight: "800",
-                color: "#FFFFFF",
-                fontVariant: ["tabular-nums"],
-                lineHeight: 32,
-              }}
-            >
-              {data.studyStreak} {data.studyStreak === 1 ? "day" : "days"}
-            </Text>
-          </View>
-          <View
-            style={{
-              backgroundColor: "rgba(255,255,255,0.25)",
-              paddingHorizontal: 14,
-              paddingVertical: 8,
-              borderRadius: radius.full,
-              borderCurve: "continuous",
-            }}
-          >
-            <Text
-              selectable
-              style={{
-                fontSize: 15,
-                fontWeight: "700",
-                color: "#FFFFFF",
-                fontVariant: ["tabular-nums"],
-              }}
-            >
-              {data.todayStudyMinutes > 0
-                ? formatDuration(data.todayStudyMinutes)
-                : "0m"}{" "}
-              today
-            </Text>
-          </View>
-        </View>
-      </Animated.View>
-
-      {/* ── Weekly Progress ──────────────────────────────────── */}
-      <Animated.View
-        entering={FadeInDown.delay(100).duration(400)}
-        style={{
+      <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
+        style={{ flex: 1 }}
+        contentContainerStyle={{
           paddingHorizontal: spacing.lg,
-          marginBottom: spacing.xl,
+          paddingTop: spacing.sm,
+          paddingBottom: 128,
         }}
+        showsVerticalScrollIndicator={false}
       >
-        <View
-          style={{
-            backgroundColor: colors.surface,
-            borderRadius: radius.lg,
-            borderCurve: "continuous",
-            padding: spacing.lg,
-            boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-          }}
-        >
+        <Animated.View entering={FadeIn.duration(340)}>
           <Text
             style={{
-              ...font.footnote,
-              fontWeight: "600",
+              ...font.subhead,
               color: colors.textSecondary,
-              textTransform: "uppercase",
-              letterSpacing: 0.5,
-              marginBottom: spacing.lg,
+              marginBottom: 4,
             }}
           >
-            This week
+            {new Date().toLocaleDateString("en-US", {
+              weekday: "long",
+              month: "long",
+              day: "numeric",
+            })}
           </Text>
+          <Text style={{ ...font.title1, color: colors.textPrimary, fontWeight: "800" }}>
+            {getGreeting()}, {displayName}
+          </Text>
+          <Text style={{ ...font.caption1, color: colors.textSecondary, marginTop: 2 }}>
+            Stay intentional. Build momentum with clear priorities.
+          </Text>
+        </Animated.View>
 
-          {/* Study row */}
-          <View style={{ marginBottom: spacing.lg }}>
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: spacing.sm,
-              }}
-            >
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: spacing.sm,
-                }}
-              >
-                <View
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: 8,
-                    borderCurve: "continuous",
-                    backgroundColor: colors.primaryLight,
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <SymbolView
-                    name="book.fill"
-                    size={14}
-                    tintColor={colors.primary}
-                  />
-                </View>
-                <Text
-                  style={{
-                    ...font.subhead,
-                    fontWeight: "600",
-                    color: colors.textPrimary,
-                  }}
-                >
-                  Study
-                </Text>
-              </View>
-              <Text
-                selectable
-                style={{
-                  ...font.subhead,
-                  fontWeight: "700",
-                  color: colors.primary,
-                  fontVariant: ["tabular-nums"],
-                }}
-              >
-                {formatDuration(data.weeklyStudyMinutes)}
-              </Text>
-            </View>
-            <ProgressBar
-              value={studyPct}
-              color={colors.primary}
-              trackColor={colors.primaryLight}
-              height={8}
-            />
-          </View>
-
-          {/* Budget row */}
-          <View>
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: spacing.sm,
-              }}
-            >
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: spacing.sm,
-                }}
-              >
-                <View
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: 8,
-                    borderCurve: "continuous",
-                    backgroundColor: isOverBudget
-                      ? colors.dangerLight
-                      : colors.successLight,
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <SymbolView
-                    name="dollarsign.circle.fill"
-                    size={14}
-                    tintColor={isOverBudget ? colors.danger : colors.success}
-                  />
-                </View>
-                <Text
-                  style={{
-                    ...font.subhead,
-                    fontWeight: "600",
-                    color: colors.textPrimary,
-                  }}
-                >
-                  Budget
-                </Text>
-              </View>
-              <Text
-                selectable
-                style={{
-                  ...font.subhead,
-                  fontWeight: "700",
-                  color: isOverBudget ? colors.danger : colors.success,
-                  fontVariant: ["tabular-nums"],
-                }}
-              >
-                ${Math.abs(budgetRemaining).toFixed(0)}{" "}
-                {isOverBudget ? "over" : "left"}
-              </Text>
-            </View>
-            <ProgressBar
-              value={budgetPct}
-              color={
-                isOverBudget
-                  ? colors.danger
-                  : budgetPct > 80
-                    ? colors.warning
-                    : colors.success
-              }
-              trackColor={colors.surfaceSecondary}
-              height={8}
-            />
-          </View>
-        </View>
-      </Animated.View>
-
-      {/* ── Today's Tasks ────────────────────────────────────── */}
-      <Animated.View
-        entering={FadeInDown.delay(150).duration(400)}
-        style={{ paddingHorizontal: spacing.lg }}
-      >
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginBottom: spacing.md,
-          }}
-        >
-          <View
+        <Animated.View entering={FadeInDown.delay(55).duration(360)} style={{ marginTop: spacing.md }}>
+          <LinearGradient
+            colors={["#5D5CFF", "#2E86F6", "#13B4E6"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
             style={{
-              flexDirection: "row",
-              alignItems: "center",
-              gap: spacing.sm,
+              borderRadius: radius.xl,
+              borderCurve: "continuous",
+              padding: spacing.lg,
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.3)",
+              overflow: "hidden",
             }}
           >
-            <Text
+            <View
               style={{
-                ...font.title3,
-                color: colors.textPrimary,
+                position: "absolute",
+                width: 170,
+                height: 170,
+                right: -35,
+                top: -60,
+                borderRadius: 85,
+                backgroundColor: "rgba(255,255,255,0.14)",
               }}
-            >
-              Today
-            </Text>
-            {data.tasksDueToday > 0 && (
-              <View
-                style={{
-                  backgroundColor: colors.primary,
-                  minWidth: 24,
-                  height: 24,
-                  borderRadius: 12,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  paddingHorizontal: 8,
-                }}
-              >
+            />
+
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <View>
+                <Text style={{ ...font.caption1, color: "rgba(255,255,255,0.82)" }}>
+                  Focus Momentum
+                </Text>
                 <Text
+                  selectable
                   style={{
-                    fontSize: 13,
-                    fontWeight: "700",
+                    ...font.title2,
                     color: "#FFFFFF",
+                    fontWeight: "800",
+                    marginTop: 2,
                     fontVariant: ["tabular-nums"],
                   }}
                 >
-                  {data.tasksDueToday}
+                  {data.studyStreak} day streak
                 </Text>
               </View>
-            )}
-          </View>
-          <Link href="/(home)/planner" asChild>
-            <Pressable
-              onPress={handleHaptic}
-              hitSlop={8}
-              style={({ pressed }) => ({
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 4,
-                opacity: pressed ? 0.6 : 1,
-              })}
-            >
-              <Text
-                style={{
-                  ...font.subhead,
-                  fontWeight: "600",
-                  color: colors.primary,
-                }}
-              >
-                See all
-              </Text>
-              <SymbolView
-                name="chevron.right"
-                size={12}
-                tintColor={colors.primary}
-              />
-            </Pressable>
-          </Link>
-        </View>
-      </Animated.View>
 
-      {/* Task list or empty state */}
-      <View style={{ paddingHorizontal: spacing.lg }}>
-        {todayTasks.length === 0 ? (
-          <Animated.View entering={FadeInDown.delay(200).duration(400)}>
+              <Link href="/(study)" asChild>
+                <Pressable
+                  onPress={handleHaptic}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open Study"
+                  style={({ pressed }) => ({
+                    opacity: pressed ? 0.7 : 1,
+                    backgroundColor: "rgba(255,255,255,0.2)",
+                    borderRadius: radius.full,
+                    borderCurve: "continuous",
+                    minHeight: 44,
+                    justifyContent: "center",
+                    paddingVertical: 10,
+                    paddingHorizontal: 14,
+                  })}
+                >
+                  <Text style={{ ...font.footnote, color: "#FFFFFF", fontWeight: "700" }}>
+                    Open Study
+                  </Text>
+                </Pressable>
+              </Link>
+            </View>
+
+            <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
+              <HeroPill icon="clock.fill" label="Focus Today" value={todayFocusValue} />
+              <HeroPill icon="calendar.badge.clock" label="Due Today" value={`${data.tasksDueToday}`} />
+              <HeroPill icon="tray.full.fill" label="Open Tasks" value={`${pendingTasks}`} />
+            </View>
+          </LinearGradient>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(78).duration(320)} style={{ marginTop: spacing.md }}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: spacing.sm }}
+          >
+            <ActionPill label="Inbox" icon="tray.fill" href="/(inbox)" onPress={handleHaptic} />
+            <ActionPill label="Budget" icon="creditcard.fill" href="/(budget)" onPress={handleHaptic} />
+            <ActionPill label="Study" icon="timer" href="/(study)" onPress={handleHaptic} />
+            <ActionPill label="Settings" icon="gearshape.fill" href="/(settings)" onPress={handleHaptic} />
+          </ScrollView>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(95).duration(360)} style={{ marginTop: spacing.lg }}>
+          <SectionHeading
+            title="Today Priorities"
+            subtitle={
+              todayTasks.length > 0
+                ? "Execute your most important tasks first"
+                : "No urgent items detected for today"
+            }
+            actionLabel="Planner"
+            actionHref="/(home)/planner"
+            onActionPress={handleHaptic}
+          />
+
+          {todayTasks.length === 0 ? (
             <View
               style={{
-                backgroundColor: colors.surface,
+                backgroundColor: "#FFFFFF",
                 borderRadius: radius.lg,
                 borderCurve: "continuous",
-                padding: spacing.xl,
+                borderWidth: 1,
+                borderColor: "#DAF4E8",
+                paddingVertical: spacing.xl,
+                paddingHorizontal: spacing.lg,
                 alignItems: "center",
-                marginBottom: spacing.xl,
-                boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
               }}
             >
               <View
                 style={{
-                  width: 64,
-                  height: 64,
-                  borderRadius: 32,
-                  backgroundColor: colors.successLight,
+                  width: 62,
+                  height: 62,
+                  borderRadius: 31,
+                  borderCurve: "continuous",
+                  backgroundColor: "#E8FBEF",
                   alignItems: "center",
                   justifyContent: "center",
                   marginBottom: spacing.md,
                 }}
               >
-                <SymbolView
-                  name="checkmark.circle.fill"
-                  size={32}
-                  tintColor={colors.success}
-                />
+                <SymbolView name="checkmark.seal.fill" size={30} tintColor={colors.success} />
               </View>
-              <Text
-                style={{
-                  ...font.headline,
-                  color: colors.textPrimary,
-                  marginBottom: 4,
-                }}
-              >
-                All caught up!
+              <Text style={{ ...font.headline, color: colors.textPrimary, marginBottom: 4 }}>
+                All caught up
               </Text>
-              <Text
-                style={{
-                  ...font.subhead,
-                  color: colors.textSecondary,
-                  textAlign: "center",
-                }}
-              >
-                No tasks due today. Enjoy your day{"\n"}or get ahead on
-                tomorrow's work.
+              <Text style={{ ...font.subhead, color: colors.textSecondary, textAlign: "center" }}>
+                You can invest this window in revision or planning tomorrow.
               </Text>
             </View>
-          </Animated.View>
-        ) : (
-          <View
-            style={{
-              backgroundColor: colors.surface,
-              borderRadius: radius.lg,
-              borderCurve: "continuous",
-              overflow: "hidden",
-              marginBottom: spacing.xl,
-              boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-            }}
-          >
-            {todayTasks.map((task, index) => {
-              const pc = priorityConfig[task.priority] ?? priorityConfig.low;
-              const isLast = index === todayTasks.length - 1;
+          ) : (
+            <View
+              style={{
+                backgroundColor: "#FFFFFF",
+                borderRadius: radius.lg,
+                borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: "#E3E9FF",
+                overflow: "hidden",
+              }}
+            >
+              {todayTasks.map((task, index) => {
+                const pc = priorityConfig[task.priority] ?? priorityConfig.low;
+                const isLast = index === todayTasks.length - 1;
 
-              return (
-                <Animated.View
-                  key={task.id}
-                  entering={FadeInDown.delay(200 + index * 40).duration(350)}
-                  exiting={FadeOut.duration(200)}
-                  layout={LinearTransition.duration(250)}
-                >
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      paddingVertical: spacing.md + 2,
-                      paddingHorizontal: spacing.lg,
-                      borderBottomWidth: isLast ? 0 : 0.5,
-                      borderBottomColor: colors.borderLight,
-                    }}
+                return (
+                  <Animated.View
+                    key={task.id}
+                    entering={FadeInDown.delay(160 + index * 45).duration(330)}
+                    exiting={FadeOut.duration(160)}
+                    layout={LinearTransition.duration(220)}
                   >
-                    {/* Complete button */}
-                    <Pressable
-                      onPress={() => handleToggleTask(task.id)}
-                      hitSlop={8}
-                      style={({ pressed }) => ({
-                        width: 26,
-                        height: 26,
-                        borderRadius: 13,
-                        borderWidth: 2.5,
-                        borderColor: pc.color,
+                    <View
+                      style={{
+                        flexDirection: "row",
                         alignItems: "center",
-                        justifyContent: "center",
-                        marginRight: spacing.md,
-                        opacity: pressed ? 0.4 : 1,
-                      })}
-                    />
+                        paddingVertical: spacing.md,
+                        paddingHorizontal: spacing.lg,
+                        borderBottomWidth: isLast ? 0 : 1,
+                        borderBottomColor: "#EDF2FF",
+                      }}
+                    >
+                      <Pressable
+                        onPress={() => handleToggleTask(task.id)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Complete task: ${task.title}`}
+                        hitSlop={10}
+                        style={({ pressed }) => ({
+                          width: 26,
+                          height: 26,
+                          borderRadius: 13,
+                          borderWidth: 2.5,
+                          borderColor: pc.color,
+                          marginRight: spacing.md,
+                          alignItems: "center",
+                          justifyContent: "center",
+                          opacity: pressed ? 0.55 : 1,
+                        })}
+                      />
 
-                    <View style={{ flex: 1, marginRight: spacing.sm }}>
-                      <Text
-                        style={{
-                          ...font.subhead,
-                          fontWeight: "500",
-                          color: colors.textPrimary,
-                        }}
-                        numberOfLines={1}
-                      >
-                        {task.title}
-                      </Text>
+                      <View style={{ flex: 1, marginRight: spacing.sm }}>
+                        <Text
+                          style={{
+                            ...font.subhead,
+                            color: colors.textPrimary,
+                            fontWeight: "600",
+                          }}
+                          numberOfLines={1}
+                        >
+                          {task.title}
+                        </Text>
+
+                        <View
+                          style={{
+                            flexDirection: "row",
+                            alignItems: "center",
+                            gap: spacing.md,
+                            marginTop: 3,
+                          }}
+                        >
+                          {task.course ? (
+                            <Text style={{ ...font.caption1, color: colors.textSecondary }}>
+                              {task.course}
+                            </Text>
+                          ) : null}
+                          {task.estimated_hours != null ? (
+                            <Text
+                              style={{
+                                ...font.caption1,
+                                color: colors.textSecondary,
+                                fontVariant: ["tabular-nums"],
+                              }}
+                            >
+                              {task.estimated_hours}h
+                            </Text>
+                          ) : null}
+                          {task.deadline ? (
+                            <Text style={{ ...font.caption1, color: colors.textSecondary }}>
+                              {new Date(task.deadline).toLocaleDateString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                              })}
+                            </Text>
+                          ) : null}
+                        </View>
+                      </View>
+
                       <View
                         style={{
+                          backgroundColor: pc.bg,
+                          borderRadius: radius.sm,
+                          borderCurve: "continuous",
+                          paddingHorizontal: 8,
+                          paddingVertical: 4,
                           flexDirection: "row",
                           alignItems: "center",
-                          gap: spacing.md,
-                          marginTop: 3,
+                          gap: 4,
                         }}
                       >
-                        {task.course && (
+                        <SymbolView name={pc.icon as any} size={13} tintColor={pc.color} />
+                        <Text
+                          style={{
+                            ...font.caption2,
+                            color: pc.color,
+                            fontWeight: "700",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {task.priority}
+                        </Text>
+                      </View>
+                    </View>
+                  </Animated.View>
+                );
+              })}
+            </View>
+          )}
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(140).duration(350)} style={{ marginTop: spacing.lg }}>
+          <SectionHeading title="Weekly Pulse" subtitle="Progress against your study and budget targets" />
+
+          <View
+            style={{
+              backgroundColor: "#FFFFFF",
+              borderRadius: radius.lg,
+              borderCurve: "continuous",
+              borderWidth: 1,
+              borderColor: "#E3E9FF",
+              padding: spacing.lg,
+              gap: spacing.lg,
+            }}
+          >
+            <View>
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: spacing.sm,
+                }}
+              >
+                <Text style={{ ...font.subhead, color: colors.textPrimary, fontWeight: "600" }}>
+                  Study Goal
+                </Text>
+                <Text
+                  selectable
+                  style={{
+                    ...font.subhead,
+                    color: colors.primary,
+                    fontWeight: "700",
+                    fontVariant: ["tabular-nums"],
+                  }}
+                >
+                  {formatDuration(data.weeklyStudyMinutes)} / {formatDuration(studyGoalMinutes)}
+                </Text>
+              </View>
+              <ProgressBar
+                value={studyPct}
+                color={colors.primary}
+                trackColor="#ECE8FF"
+                height={9}
+              />
+            </View>
+
+            <View>
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: spacing.sm,
+                }}
+              >
+                <Text style={{ ...font.subhead, color: colors.textPrimary, fontWeight: "600" }}>
+                  Weekly Budget
+                </Text>
+                <Text
+                  selectable
+                  style={{
+                    ...font.subhead,
+                    color: isOverBudget ? colors.danger : colors.success,
+                    fontWeight: "700",
+                    fontVariant: ["tabular-nums"],
+                  }}
+                >
+                  ${data.budgetSpent.toFixed(0)} / ${data.weeklyBudget.toFixed(0)}
+                </Text>
+              </View>
+              <ProgressBar
+                value={budgetPct}
+                color={isOverBudget ? colors.danger : colors.success}
+                trackColor={isOverBudget ? "#FFE8E8" : "#E8FBEF"}
+                height={9}
+              />
+              <Text
+                style={{
+                  ...font.caption1,
+                  color: isOverBudget ? colors.danger : colors.textSecondary,
+                  marginTop: spacing.xs,
+                }}
+              >
+                {isOverBudget
+                  ? `You are $${Math.abs(budgetRemaining).toFixed(0)} over this week.`
+                  : `$${Math.abs(budgetRemaining).toFixed(0)} available for the rest of the week.`}
+              </Text>
+            </View>
+          </View>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(180).duration(360)} style={{ marginTop: spacing.lg }}>
+          <SectionHeading title="Command Deck" subtitle="Your most-used flows in one place" />
+
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: spacing.sm }}
+          >
+            {[
+              {
+                title: "Planner",
+                subtitle: "Organize",
+                cta: "Open Plan",
+                icon: "calendar",
+                colors: ["#6B6AF9", "#8A7BFF"] as const,
+                href: "/(home)/planner" as const,
+              },
+              {
+                title: "AI Tutor",
+                subtitle: "Deep Study",
+                cta: "Build Pack",
+                icon: "brain.head.profile",
+                colors: ["#C157F7", "#E56CDA"] as const,
+                href: "/(home)/tutor" as const,
+              },
+              {
+                title: "Wellness",
+                subtitle: "Recovery",
+                cta: "Check In",
+                icon: "heart.fill",
+                colors: ["#FF5A7E", "#FF8C6B"] as const,
+                href: "/(home)/wellness" as const,
+              },
+            ].map((tool, index) => (
+              <Animated.View
+                key={tool.title}
+                entering={FadeInDown.delay(205 + index * 45).duration(340)}
+              >
+                <ToolCard
+                  title={tool.title}
+                  subtitle={tool.subtitle}
+                  cta={tool.cta}
+                  icon={tool.icon}
+                  colors={tool.colors}
+                  href={tool.href}
+                  onPress={handleHaptic}
+                />
+              </Animated.View>
+            ))}
+          </ScrollView>
+        </Animated.View>
+
+        {recentSessions.length > 0 ? (
+          <Animated.View entering={FadeInDown.delay(240).duration(360)} style={{ marginTop: spacing.lg }}>
+            <SectionHeading
+              title="Recent Sessions"
+              subtitle="Your latest deep-work blocks"
+            />
+
+            <View
+              style={{
+                backgroundColor: "#FFFFFF",
+                borderRadius: radius.lg,
+                borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: "#E7ECFF",
+                overflow: "hidden",
+              }}
+            >
+              {recentSessions.map((session, index) => {
+                const isLast = index === recentSessions.length - 1;
+                return (
+                  <Animated.View
+                    key={session.id}
+                    entering={FadeInDown.delay(310 + index * 45).duration(320)}
+                  >
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        paddingVertical: spacing.md,
+                        paddingHorizontal: spacing.lg,
+                        borderBottomWidth: isLast ? 0 : 1,
+                        borderBottomColor: "#EEF2FF",
+                      }}
+                    >
+                      <View
+                        style={{
+                          width: 40,
+                          height: 40,
+                          borderRadius: 12,
+                          borderCurve: "continuous",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          marginRight: spacing.md,
+                          backgroundColor: index % 2 === 0 ? "#ECE8FF" : "#E8FBEF",
+                        }}
+                      >
+                        <SymbolView
+                          name={index % 2 === 0 ? "book.fill" : "brain"}
+                          size={17}
+                          tintColor={index % 2 === 0 ? colors.primary : colors.success}
+                        />
+                      </View>
+
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={{ ...font.subhead, color: colors.textPrimary, fontWeight: "600" }}
+                          numberOfLines={1}
+                        >
+                          {session.notes ?? "Study session"}
+                        </Text>
+                        <Text style={{ ...font.caption1, color: colors.textSecondary, marginTop: 2 }}>
+                          {formatRelativeDate(session.started_at)}
+                        </Text>
+                      </View>
+
+                      {session.duration_minutes != null ? (
+                        <View
+                          style={{
+                            borderRadius: radius.sm,
+                            borderCurve: "continuous",
+                            paddingHorizontal: 10,
+                            paddingVertical: 4,
+                            backgroundColor: "#EDF4FF",
+                          }}
+                        >
                           <Text
+                            selectable
                             style={{
-                              ...font.caption1,
-                              color: colors.textTertiary,
-                            }}
-                          >
-                            {task.course}
-                          </Text>
-                        )}
-                        {task.estimated_hours != null && (
-                          <Text
-                            style={{
-                              ...font.caption1,
-                              color: colors.textTertiary,
+                              ...font.footnote,
+                              color: "#2975F0",
+                              fontWeight: "700",
                               fontVariant: ["tabular-nums"],
                             }}
                           >
-                            {task.estimated_hours}h
+                            {formatDuration(session.duration_minutes)}
                           </Text>
-                        )}
-                        {task.deadline && (
-                          <Text
-                            style={{
-                              ...font.caption1,
-                              color: colors.textTertiary,
-                            }}
-                          >
-                            {new Date(task.deadline).toLocaleDateString(
-                              "en-US",
-                              { month: "short", day: "numeric" }
-                            )}
-                          </Text>
-                        )}
-                      </View>
+                        </View>
+                      ) : null}
                     </View>
-
-                    {/* Priority pill */}
-                    <View
-                      style={{
-                        backgroundColor: pc.bg,
-                        paddingHorizontal: 8,
-                        paddingVertical: 4,
-                        borderRadius: 8,
-                        borderCurve: "continuous",
-                      }}
-                    >
-                      <SymbolView
-                        name={pc.icon as any}
-                        size={14}
-                        tintColor={pc.color}
-                      />
-                    </View>
-                  </View>
-                </Animated.View>
-              );
-            })}
-          </View>
-        )}
-      </View>
-
-      {/* ── Quick Access Grid ────────────────────────────────── */}
-      <Animated.View
-        entering={FadeInDown.delay(300).duration(400)}
-        style={{ paddingHorizontal: spacing.lg }}
-      >
-        <Text
-          style={{
-            ...font.title3,
-            color: colors.textPrimary,
-            marginBottom: spacing.md,
-          }}
-        >
-          Quick access
-        </Text>
-      </Animated.View>
-
-      <Animated.View
-        entering={FadeInDown.delay(340).duration(400)}
-        style={{
-          flexDirection: "row",
-          gap: spacing.sm,
-          paddingHorizontal: spacing.lg,
-          marginBottom: spacing.xl,
-        }}
-      >
-        {[
-          {
-            title: "Planner",
-            icon: "calendar" as const,
-            color: "#5856D6",
-            gradient: "#EDEDFC",
-            href: "/(home)/planner" as const,
-          },
-          {
-            title: "AI Tutor",
-            icon: "brain.head.profile" as const,
-            color: "#AF52DE",
-            gradient: "#F5EDFC",
-            href: "/(home)/tutor" as const,
-          },
-          {
-            title: "Wellness",
-            icon: "heart.fill" as const,
-            color: "#FF375F",
-            gradient: "#FFEAEF",
-            href: "/(home)/wellness" as const,
-          },
-        ].map((tool, index) => (
-          <Animated.View
-            key={tool.title}
-            entering={FadeInDown.delay(360 + index * 40).duration(350)}
-            style={{ flex: 1 }}
-          >
-            <Link href={tool.href} asChild>
-              <Pressable
-                onPress={handleHaptic}
-                style={({ pressed }) => ({
-                  opacity: pressed ? 0.7 : 1,
-                  transform: [{ scale: pressed ? 0.97 : 1 }],
-                })}
-              >
-                <View
-                  style={{
-                    backgroundColor: colors.surface,
-                    borderRadius: radius.lg,
-                    borderCurve: "continuous",
-                    paddingVertical: spacing.lg + 4,
-                    alignItems: "center",
-                    boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-                  }}
-                >
-                  <View
-                    style={{
-                      width: 48,
-                      height: 48,
-                      borderRadius: 14,
-                      borderCurve: "continuous",
-                      backgroundColor: tool.gradient,
-                      alignItems: "center",
-                      justifyContent: "center",
-                      marginBottom: spacing.sm,
-                    }}
-                  >
-                    <SymbolView
-                      name={tool.icon}
-                      size={22}
-                      tintColor={tool.color}
-                    />
-                  </View>
-                  <Text
-                    style={{
-                      ...font.footnote,
-                      fontWeight: "600",
-                      color: colors.textPrimary,
-                    }}
-                  >
-                    {tool.title}
-                  </Text>
-                </View>
-              </Pressable>
-            </Link>
+                  </Animated.View>
+                );
+              })}
+            </View>
           </Animated.View>
-        ))}
-      </Animated.View>
-
-      {/* ── Recent Activity ──────────────────────────────────── */}
-      {recentSessions.length > 0 && (
-        <Animated.View
-          entering={FadeInDown.delay(450).duration(400)}
-          style={{ paddingHorizontal: spacing.lg }}
-        >
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "space-between",
-              marginBottom: spacing.md,
-            }}
-          >
-            <Text
-              style={{
-                ...font.title3,
-                color: colors.textPrimary,
-              }}
-            >
-              Recent activity
-            </Text>
-            <Text
-              selectable
-              style={{
-                ...font.footnote,
-                fontWeight: "500",
-                color: colors.textTertiary,
-                fontVariant: ["tabular-nums"],
-              }}
-            >
-              {data.tasksCompleted} done this week
-            </Text>
-          </View>
-
-          <View
-            style={{
-              backgroundColor: colors.surface,
-              borderRadius: radius.lg,
-              borderCurve: "continuous",
-              overflow: "hidden",
-              boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-            }}
-          >
-            {recentSessions.map((session, index) => {
-              const isLast = index === recentSessions.length - 1;
-              return (
-                <Animated.View
-                  key={session.id}
-                  entering={FadeInDown.delay(480 + index * 40).duration(350)}
-                >
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      paddingVertical: spacing.md,
-                      paddingHorizontal: spacing.lg,
-                      borderBottomWidth: isLast ? 0 : 0.5,
-                      borderBottomColor: colors.borderLight,
-                    }}
-                  >
-                    <View
-                      style={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: 12,
-                        borderCurve: "continuous",
-                        backgroundColor: colors.primaryLight,
-                        alignItems: "center",
-                        justifyContent: "center",
-                        marginRight: spacing.md,
-                      }}
-                    >
-                      <SymbolView
-                        name="book.fill"
-                        size={18}
-                        tintColor={colors.primary}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text
-                        style={{
-                          ...font.subhead,
-                          fontWeight: "500",
-                          color: colors.textPrimary,
-                        }}
-                        numberOfLines={1}
-                      >
-                        {session.notes ?? "Study session"}
-                      </Text>
-                      <Text
-                        style={{
-                          ...font.caption1,
-                          color: colors.textTertiary,
-                          marginTop: 2,
-                        }}
-                      >
-                        {formatRelativeDate(session.started_at)}
-                      </Text>
-                    </View>
-                    {session.duration_minutes != null && (
-                      <View
-                        style={{
-                          backgroundColor: colors.primaryLight,
-                          paddingHorizontal: 10,
-                          paddingVertical: 4,
-                          borderRadius: 8,
-                          borderCurve: "continuous",
-                        }}
-                      >
-                        <Text
-                          selectable
-                          style={{
-                            ...font.footnote,
-                            fontWeight: "600",
-                            color: colors.primary,
-                            fontVariant: ["tabular-nums"],
-                          }}
-                        >
-                          {formatDuration(session.duration_minutes)}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                </Animated.View>
-              );
-            })}
-          </View>
-        </Animated.View>
-      )}
-    </ScrollView>
+        ) : null}
+      </ScrollView>
+    </View>
   );
 }

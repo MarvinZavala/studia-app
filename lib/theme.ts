@@ -1,40 +1,84 @@
-export const colors = {
+import { Appearance } from "react-native";
+
+const lightColors = {
   // Backgrounds
-  background: '#F2F2F7',
-  surface: '#FFFFFF',
-  surfaceSecondary: '#F2F2F7',
-  surfaceGrouped: '#FFFFFF',
+  background: "#F2F2F7",
+  surface: "#FFFFFF",
+  surfaceSecondary: "#F2F2F7",
+  surfaceGrouped: "#FFFFFF",
 
   // Brand
-  primary: '#5856D6',
-  primaryLight: '#EDEDFC',
-  primaryDark: '#3634A3',
-  accent: '#FF9F0A',
-  accentLight: '#FFF3E0',
+  primary: "#5856D6",
+  primaryLight: "#EDEDFC",
+  primaryDark: "#3634A3",
+  accent: "#FF9F0A",
+  accentLight: "#FFF3E0",
 
   // Semantic
-  secondary: '#FF375F',
-  secondaryLight: '#FFEAEF',
-  success: '#30D158',
-  successLight: '#E7FAF0',
-  warning: '#FF9F0A',
-  warningLight: '#FFF3E0',
-  danger: '#FF453A',
-  dangerLight: '#FFECEB',
+  secondary: "#FF375F",
+  secondaryLight: "#FFEAEF",
+  success: "#30D158",
+  successLight: "#E7FAF0",
+  warning: "#FF9F0A",
+  warningLight: "#FFF3E0",
+  danger: "#FF453A",
+  dangerLight: "#FFECEB",
 
   // Text
-  textPrimary: '#000000',
-  textSecondary: '#8E8E93',
-  textTertiary: '#AEAEB2',
+  textPrimary: "#000000",
+  textSecondary: "#8E8E93",
+  textTertiary: "#AEAEB2",
 
   // Borders
-  border: '#D1D1D6',
-  borderLight: '#E5E5EA',
-  separator: '#C6C6C8',
+  border: "#D1D1D6",
+  borderLight: "#E5E5EA",
+  separator: "#C6C6C8",
 
   // Special
-  tint: '#5856D6',
+  tint: "#5856D6",
 };
+
+const darkColors = {
+  // Backgrounds
+  background: "#000000",
+  surface: "#1C1C1E",
+  surfaceSecondary: "#2C2C2E",
+  surfaceGrouped: "#1C1C1E",
+
+  // Brand
+  primary: "#7D7BFF",
+  primaryLight: "#2D2B5A",
+  primaryDark: "#A5A3FF",
+  accent: "#FFB340",
+  accentLight: "#4A3A21",
+
+  // Semantic
+  secondary: "#FF6482",
+  secondaryLight: "#4A2632",
+  success: "#4CD964",
+  successLight: "#243C2C",
+  warning: "#FFB340",
+  warningLight: "#4A3A21",
+  danger: "#FF6961",
+  dangerLight: "#4A2A2A",
+
+  // Text
+  textPrimary: "#FFFFFF",
+  textSecondary: "#A1A1A6",
+  textTertiary: "#8E8E93",
+
+  // Borders
+  border: "#3A3A3C",
+  borderLight: "#2C2C2E",
+  separator: "#38383A",
+
+  // Special
+  tint: "#7D7BFF",
+};
+
+const systemScheme = Appearance.getColorScheme();
+
+export const colors = systemScheme === "dark" ? darkColors : lightColors;
 
 export const categoryColors: Record<string, string> = {
   food: '#FF375F',

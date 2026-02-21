@@ -13,7 +13,7 @@ export default function HomeLayout() {
         headerBackButtonDisplayMode: "minimal",
       }}
     >
-      <Stack.Screen name="index" options={{ title: "Studia" }} />
+      <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="planner" options={{ title: "Planner" }} />
       <Stack.Screen name="tutor" options={{ title: "Tutor" }} />
       <Stack.Screen name="wellness" options={{ title: "Wellness" }} />

@@ -43,6 +43,10 @@ export function Button({
   return (
     <Pressable
       disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityState={{ disabled: !!disabled }}
+      android_ripple={{ color: "rgba(255,255,255,0.2)" }}
       style={({ pressed }) => [
         {
           backgroundColor: colors.background,

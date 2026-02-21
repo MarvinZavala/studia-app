@@ -1,4 +1,5 @@
 import { Task, WellnessMode } from "@/lib/types/database";
+import { getLocalISODate } from "@/lib/utils/date";
 
 export interface DayPlan {
   date: string;
@@ -35,7 +36,7 @@ export function generatePlan(
   for (let i = 0; i < 7; i++) {
     const date = new Date(today);
     date.setDate(date.getDate() + i);
-    const dateStr = date.toISOString().split("T")[0];
+    const dateStr = getLocalISODate(date);
 
     let label: string;
     if (i === 0) label = "Today";

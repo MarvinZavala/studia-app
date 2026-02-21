@@ -7,8 +7,9 @@ import * as Haptics from "expo-haptics";
 
 import { Button } from "@/components/ui/button";
 import { colors, spacing, radius, font, categoryColors } from "@/lib/theme";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth-context";
+import { createBudgetExpense } from "@/lib/data/studia-api";
+import { getLocalISODate } from "@/lib/utils/date";
 import type { BudgetCategory } from "@/lib/types/database";
 
 const CATEGORIES: { key: BudgetCategory; icon: string; label: string }[] = [
@@ -25,9 +26,7 @@ export default function AddExpenseScreen() {
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<BudgetCategory>("food");
   const [description, setDescription] = useState("");
-  const [dateText, setDateText] = useState(
-    new Date().toISOString().slice(0, 10)
-  );
+  const [dateText, setDateText] = useState(getLocalISODate());
 
   async function handleSave() {
     const numAmount = parseFloat(amount);
@@ -45,18 +44,26 @@ export default function AddExpenseScreen() {
       return;
     }
 
+    if (!user?.id) {
+      Alert.alert("Session expired", "Please sign in again.");
+      return;
+    }
+
+    try {
+      await createBudgetExpense(user.id, {
+        amount: numAmount,
+        category,
+        description: description.trim() || null,
+        date: dateText,
+      });
+    } catch {
+      Alert.alert("Could not save expense", "Please try again.");
+      return;
+    }
+
     if (process.env.EXPO_OS === "ios") {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
-
-    await supabase.from("studia_budget_entries").insert({
-      user_id: user?.id,
-      amount: numAmount,
-      category,
-      description: description.trim() || null,
-      entry_type: "expense",
-      date: dateText,
-    });
 
     router.back();
   }
@@ -327,7 +334,7 @@ export default function AddExpenseScreen() {
                 if (process.env.EXPO_OS === "ios") {
                   Haptics.selectionAsync();
                 }
-                setDateText(new Date().toISOString().slice(0, 10));
+                setDateText(getLocalISODate());
               }}
               style={({ pressed }) => ({
                 paddingVertical: 6,
@@ -355,7 +362,7 @@ export default function AddExpenseScreen() {
                 }
                 const yesterday = new Date();
                 yesterday.setDate(yesterday.getDate() - 1);
-                setDateText(yesterday.toISOString().slice(0, 10));
+                setDateText(getLocalISODate(yesterday));
               }}
               style={({ pressed }) => ({
                 paddingVertical: 6,

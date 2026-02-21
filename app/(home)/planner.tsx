@@ -6,25 +6,46 @@ import * as Haptics from "expo-haptics";
 import { useCallback, useState, useRef } from "react";
 import { Badge, ProgressBar } from "@/components/ui";
 import { colors, spacing, radius, font } from "@/lib/theme";
-import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth-context";
+import { listTasksForUser, listWellnessHistory } from "@/lib/data/studia-api";
+import type { WellnessMode } from "@/lib/types/database";
+import { getLocalISODate } from "@/lib/utils/date";
 import { generatePlan, type DayPlan } from "@/lib/utils/planner-engine";
 
 export default function PlannerScreen() {
+  const { user } = useAuth();
   const [plan, setPlan] = useState<DayPlan[]>([]);
+  const [activeMode, setActiveMode] = useState<WellnessMode>("normal");
   const [selectedDay, setSelectedDay] = useState(0);
   const scrollRef = useRef<ScrollView>(null);
 
   useFocusEffect(
     useCallback(() => {
+      if (!user?.id) return;
       (async () => {
-        const { data: tasks } = await supabase
-          .from("studia_tasks")
-          .select("*");
-        const generated = generatePlan((tasks ?? []) as any);
-        setPlan(generated);
+        try {
+          const [tasks, wellnessLogs] = await Promise.all([
+            listTasksForUser(user.id),
+            listWellnessHistory(user.id, 1),
+          ]);
+
+          const today = getLocalISODate();
+          const latestWellness = wellnessLogs[0];
+          const plannerMode: WellnessMode =
+            latestWellness && latestWellness.date === today
+              ? latestWellness.mode
+              : "normal";
+
+          const generated = generatePlan(tasks, plannerMode);
+          setPlan(generated);
+          setActiveMode(plannerMode);
+        } catch {
+          setPlan([]);
+          setActiveMode("normal");
+        }
         setSelectedDay(0);
       })();
-    }, [])
+    }, [user?.id])
   );
 
   const handleSelectDay = (index: number) => {
@@ -56,6 +77,62 @@ export default function PlannerScreen() {
           Auto-generated plan based on your priorities and deadlines
         </Text>
       </Animated.View>
+
+      {activeMode === "light" && (
+        <Animated.View entering={FadeInDown.delay(30).duration(380)}>
+          <View
+            style={{
+              marginHorizontal: spacing.lg,
+              marginBottom: spacing.md,
+              backgroundColor: "#FFF4E7",
+              borderRadius: radius.md,
+              borderCurve: "continuous",
+              borderWidth: 1,
+              borderColor: "#FFD6A6",
+              padding: spacing.md,
+              flexDirection: "row",
+              alignItems: "center",
+              gap: spacing.sm,
+            }}
+          >
+            <View
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 10,
+                borderCurve: "continuous",
+                backgroundColor: "#FFE7CC",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <SymbolView name="moon.fill" size={16} tintColor="#E58A1F" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text
+                style={{
+                  ...font.footnote,
+                  color: "#A35F00",
+                  fontWeight: "700",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.6,
+                }}
+              >
+                Light Mode Active
+              </Text>
+              <Text
+                style={{
+                  ...font.caption1,
+                  color: "#8B6A3B",
+                  marginTop: 2,
+                }}
+              >
+                Planner is prioritizing essential tasks for recovery.
+              </Text>
+            </View>
+          </View>
+        </Animated.View>
+      )}
 
       {/* ── Day Selector ──────────────────────────────────────── */}
       <Animated.View entering={FadeInDown.delay(60).duration(400)}>

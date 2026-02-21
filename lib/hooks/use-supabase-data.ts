@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth-context";
+import { getLocalISODate } from "@/lib/utils/date";
 import type {
   Task,
   StudySession,
@@ -21,7 +22,7 @@ function useStudiaTable<T extends { id: string }>(table: string) {
   const fetchAll = useCallback(async (orderBy?: string, ascending = false) => {
     if (!user) return [];
     setLoading(true);
-    let query = supabase.from(table).select("*");
+    let query = supabase.from(table).select("*").eq("user_id", user.id);
     if (orderBy) query = query.order(orderBy, { ascending });
     const { data: rows, error } = await query;
     if (error) { console.error(`[${table}] fetch error:`, error.message); setLoading(false); return []; }
@@ -47,6 +48,7 @@ function useStudiaTable<T extends { id: string }>(table: string) {
       .from(table)
       .update(updates)
       .eq("id", id)
+      .eq("user_id", user.id)
       .select()
       .single();
     if (error) { console.error(`[${table}] update error:`, error.message); return null; }
@@ -55,7 +57,11 @@ function useStudiaTable<T extends { id: string }>(table: string) {
 
   const remove = useCallback(async (id: string) => {
     if (!user) return false;
-    const { error } = await supabase.from(table).delete().eq("id", id);
+    const { error } = await supabase
+      .from(table)
+      .delete()
+      .eq("id", id)
+      .eq("user_id", user.id);
     if (error) { console.error(`[${table}] delete error:`, error.message); return false; }
     return true;
   }, [user, table]);
@@ -80,7 +86,8 @@ export function useBudgetSettings() {
     if (!user) return null;
     const { data, error } = await supabase
       .from("studia_budget_settings")
-      .select("*")
+      .select("id,user_id,weekly_budget,updated_at")
+      .eq("user_id", user.id)
       .single();
     if (error && error.code !== "PGRST116") console.error("[budget_settings]", error.message);
     setSettings(data as BudgetSettings | null);
@@ -107,7 +114,8 @@ export function useStreak() {
     if (!user) return null;
     const { data, error } = await supabase
       .from("studia_streaks")
-      .select("*")
+      .select("id,user_id,current_streak,longest_streak,last_active,updated_at")
+      .eq("user_id", user.id)
       .single();
     if (error && error.code !== "PGRST116") console.error("[streaks]", error.message);
     setStreak(data as Streak | null);
@@ -121,7 +129,7 @@ export function useStreak() {
       .update({
         current_streak: current,
         longest_streak: longest,
-        last_active: new Date().toISOString().slice(0, 10),
+        last_active: getLocalISODate(),
         updated_at: new Date().toISOString(),
       })
       .eq("user_id", user.id);
@@ -139,7 +147,8 @@ export function useProfile() {
     if (!user) return null;
     const { data, error } = await supabase
       .from("studia_profiles")
-      .select("*")
+      .select("display_name,avatar_url")
+      .eq("id", user.id)
       .single();
     if (error) console.error("[profile]", error.message);
     setProfile(data);

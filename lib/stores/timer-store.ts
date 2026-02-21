@@ -91,7 +91,6 @@ export const useTimerStore = create<TimerState>()(
         set({
           phase: "break",
           secondsRemaining: state.breakDuration * 60,
-          sessionsCompleted: state.sessionsCompleted + 1,
           isRunning: true,
         });
       },

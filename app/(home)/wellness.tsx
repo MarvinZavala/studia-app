@@ -11,17 +11,21 @@ import Animated, {
 import { SymbolView } from "expo-symbols";
 import * as Haptics from "expo-haptics";
 import Slider from "@react-native-community/slider";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Svg, { Circle } from "react-native-svg";
-import { Button } from "@/components/ui";
+import { Button, EmptyState } from "@/components/ui";
 import { colors, spacing, radius, font } from "@/lib/theme";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth-context";
+import {
+  createWellnessLog,
+  listWellnessHistory,
+} from "@/lib/data/studia-api";
 import {
   calculateWellness,
   type WellnessInput,
   type WellnessResult,
 } from "@/lib/utils/wellness-engine";
+import { getLocalISODate } from "@/lib/utils/date";
 import type { WellnessLog } from "@/lib/types/database";
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
@@ -44,14 +48,17 @@ function ScoreRing({
     strokeDashoffset: circumference * (1 - progress.value),
   }));
 
-  useState(() => {
-    setTimeout(() => {
+  useEffect(() => {
+    progress.value = 0;
+    const timeout = setTimeout(() => {
       progress.value = withTiming(score / 10, {
         duration: 1000,
         easing: Easing.out(Easing.cubic),
       });
     }, 300);
-  });
+
+    return () => clearTimeout(timeout);
+  }, [progress, score]);
 
   const ringColor =
     level === "good"
@@ -245,10 +252,10 @@ function SliderControl({
 function formatLogDate(dateStr: string): string {
   const date = new Date(dateStr);
   const now = new Date();
-  const today = now.toISOString().split("T")[0];
+  const today = getLocalISODate(now);
   const yesterday = new Date(now);
   yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toISOString().split("T")[0];
+  const yesterdayStr = getLocalISODate(yesterday);
 
   if (dateStr === today) return "Today";
   if (dateStr === yesterdayStr) return "Yesterday";
@@ -269,13 +276,14 @@ export default function WellnessScreen() {
   const [hasCheckedIn, setHasCheckedIn] = useState(false);
 
   const loadHistory = useCallback(async () => {
-    const { data: logs } = await supabase
-      .from("studia_wellness_logs")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(7);
-    setHistory((logs ?? []) as WellnessLog[]);
-  }, []);
+    if (!user?.id) return;
+    try {
+      const logs = await listWellnessHistory(user.id, 7);
+      setHistory(logs);
+    } catch {
+      setHistory([]);
+    }
+  }, [user?.id]);
 
   useFocusEffect(
     useCallback(() => {
@@ -286,6 +294,7 @@ export default function WellnessScreen() {
   );
 
   const handleCheckIn = async () => {
+    if (!user?.id) return;
     if (process.env.EXPO_OS === "ios") {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
@@ -295,16 +304,19 @@ export default function WellnessScreen() {
     setResult(wellness);
     setHasCheckedIn(true);
 
-    const today = new Date().toISOString().split("T")[0];
-    await supabase.from("studia_wellness_logs").insert({
-      user_id: user?.id,
-      date: today,
-      stress,
-      sleep_hours: sleepHours,
-      energy,
-      score: wellness.score,
-      mode: wellness.mode,
-    });
+    const today = getLocalISODate();
+    try {
+      await createWellnessLog(user.id, {
+        date: today,
+        stress,
+        sleep_hours: sleepHours,
+        energy,
+        score: wellness.score,
+        mode: wellness.mode,
+      });
+    } catch {
+      // keep local score result even if persistence fails
+    }
 
     if (process.env.EXPO_OS === "ios") {
       setTimeout(() => {
@@ -557,30 +569,7 @@ export default function WellnessScreen() {
         <Animated.View
           entering={FadeInDown.delay(result ? 660 : 180).duration(400)}
         >
-          <View
-            style={{
-              backgroundColor: colors.surface,
-              borderRadius: radius.md,
-              borderCurve: "continuous",
-              alignItems: "center",
-              paddingVertical: spacing.xxl,
-            }}
-          >
-            <SymbolView
-              name="heart.text.clipboard"
-              size={36}
-              tintColor={colors.textTertiary}
-            />
-            <Text
-              style={{
-                ...font.subhead,
-                color: colors.textTertiary,
-                marginTop: spacing.sm,
-              }}
-            >
-              No check-ins yet
-            </Text>
-          </View>
+          <EmptyState icon="heart.text.clipboard" title="No check-ins yet" />
         </Animated.View>
       ) : (
         <View

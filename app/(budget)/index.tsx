@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useCallback } from "react";
 import { View, Text, ScrollView, Pressable, Alert } from "react-native";
 import Animated, {
   FadeIn,
@@ -8,11 +8,14 @@ import Animated, {
 } from "react-native-reanimated";
 import { useFocusEffect, useRouter } from "expo-router";
 import { SymbolView } from "expo-symbols";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 
 import { ProgressBar } from "@/components/ui/progress-bar";
+import { EmptyState } from "@/components/ui/empty-state";
 import { colors, spacing, radius, font, categoryColors } from "@/lib/theme";
-import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth-context";
+import { useBudgetData } from "@/lib/features/budget/use-budget-data";
 import type { BudgetEntry, BudgetCategory } from "@/lib/types/database";
 
 const CATEGORY_ICONS: Record<BudgetCategory, string> = {
@@ -69,70 +72,97 @@ function groupByDay(entries: BudgetEntry[]): GroupedExpenses[] {
     }));
 }
 
+interface CategoryRowProps {
+  category: BudgetCategory;
+  value: number;
+  totalSpent: number;
+  isLast: boolean;
+}
+
+function CategoryRow({ category, value, totalSpent, isLast }: CategoryRowProps) {
+  const pct = totalSpent > 0 ? (value / totalSpent) * 100 : 0;
+
+  return (
+    <View
+      style={{
+        paddingVertical: spacing.sm + 2,
+        borderBottomWidth: isLast ? 0 : 1,
+        borderBottomColor: "#EEF2FF",
+      }}
+    >
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 6,
+        }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+          <View
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 10,
+              borderCurve: "continuous",
+              backgroundColor: `${categoryColors[category]}20`,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <SymbolView
+              name={CATEGORY_ICONS[category] as any}
+              size={15}
+              tintColor={categoryColors[category]}
+            />
+          </View>
+          <Text style={{ ...font.subhead, color: colors.textPrimary, fontWeight: "600" }}>
+            {CATEGORY_LABELS[category]}
+          </Text>
+        </View>
+
+        <Text
+          selectable
+          style={{
+            ...font.subhead,
+            color: colors.textPrimary,
+            fontWeight: "700",
+            fontVariant: ["tabular-nums"],
+          }}
+        >
+          ${value.toFixed(2)}
+        </Text>
+      </View>
+
+      <ProgressBar
+        value={pct}
+        color={categoryColors[category]}
+        trackColor={`${categoryColors[category]}1A`}
+        height={7}
+      />
+    </View>
+  );
+}
+
 export default function BudgetScreen() {
   const router = useRouter();
-  const [weeklyBudget, setWeeklyBudget] = useState(100);
-  const [expenses, setExpenses] = useState<BudgetEntry[]>([]);
-  const [totalSpent, setTotalSpent] = useState(0);
-  const [categoryTotals, setCategoryTotals] = useState<
-    Record<BudgetCategory, number>
-  >({
-    food: 0,
-    school: 0,
-    transport: 0,
-    entertainment: 0,
-    other: 0,
-  });
+  const { user } = useAuth();
+  const {
+    weeklyBudget,
+    expenses,
+    totalSpent,
+    categoryTotals,
+    activeCategories,
+    loadData,
+    removeExpense,
+  } = useBudgetData(user?.id);
 
   useFocusEffect(
     useCallback(() => {
+      if (!user?.id) return;
       loadData();
-    }, [])
+    }, [user?.id, loadData])
   );
-
-  async function loadData() {
-    const { data: settingsRows } = await supabase
-      .from("studia_budget_settings")
-      .select("weekly_budget")
-      .maybeSingle();
-    if (settingsRows) setWeeklyBudget(settingsRows.weekly_budget);
-
-    const { data: allEntries } = await supabase
-      .from("studia_budget_entries")
-      .select("*")
-      .eq("entry_type", "expense")
-      .order("date", { ascending: false });
-    const expenseEntries = (allEntries ?? []) as BudgetEntry[];
-
-    const now = new Date();
-    const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - now.getDay());
-    weekStart.setHours(0, 0, 0, 0);
-
-    const thisWeekExpenses = expenseEntries.filter(
-      (e) => new Date(e.date) >= weekStart
-    );
-
-    setExpenses(expenseEntries);
-
-    const spent = thisWeekExpenses.reduce(
-      (sum, e) => sum + Number(e.amount),
-      0
-    );
-    setTotalSpent(spent);
-
-    const cats: Record<BudgetCategory, number> = {
-      food: 0,
-      school: 0,
-      transport: 0,
-      entertainment: 0,
-      other: 0,
-    };
-    for (const e of thisWeekExpenses) {
-      cats[e.category] += Number(e.amount);
-    }
-    setCategoryTotals(cats);
-  }
 
   async function handleDeleteExpense(id: string) {
     if (process.env.EXPO_OS === "ios") {
@@ -144,8 +174,10 @@ export default function BudgetScreen() {
         text: "Delete",
         style: "destructive",
         onPress: async () => {
-          await supabase.from("studia_budget_entries").delete().eq("id", id);
-          loadData();
+          const ok = await removeExpense(id);
+          if (!ok) {
+            Alert.alert("Could not delete expense", "Please try again.");
+          }
         },
       },
     ]);
@@ -163,79 +195,99 @@ export default function BudgetScreen() {
       : colors.primary;
 
   const grouped = groupByDay(expenses);
-
-  const activeCats = (
-    Object.keys(categoryTotals) as BudgetCategory[]
-  ).filter((cat) => categoryTotals[cat] > 0);
+  const activeCats = activeCategories;
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.background }}>
+    <View style={{ flex: 1, backgroundColor: "#EEF2FF" }}>
+      <LinearGradient
+        colors={["#EEF2FF", "#F4FCFF", "#FFF5EA"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={{ position: "absolute", inset: 0 }}
+      />
+
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         style={{ flex: 1 }}
         contentContainerStyle={{
           paddingHorizontal: spacing.lg,
-          paddingBottom: 120,
+          paddingBottom: 124,
+          paddingTop: spacing.sm,
         }}
+        showsVerticalScrollIndicator={false}
       >
-        {/* ── Budget Hero ─────────────────────────────────────── */}
-        <Animated.View entering={FadeIn.duration(400)}>
-          <View
+        <Animated.View entering={FadeIn.duration(340)}>
+          <LinearGradient
+            colors={["#5B5AF8", "#327FF8", "#15B5FF"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
             style={{
-              backgroundColor: colors.surface,
-              borderRadius: radius.md,
+              borderRadius: radius.xl,
               borderCurve: "continuous",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.3)",
               padding: spacing.lg,
-              marginTop: spacing.lg,
-              marginBottom: spacing.lg,
+              overflow: "hidden",
             }}
           >
             <View
               style={{
+                position: "absolute",
+                width: 160,
+                height: 160,
+                borderRadius: 80,
+                right: -34,
+                top: -58,
+                backgroundColor: "rgba(255,255,255,0.14)",
+              }}
+            />
+
+            <View
+              style={{
                 flexDirection: "row",
-                justifyContent: "space-between",
                 alignItems: "flex-start",
+                justifyContent: "space-between",
                 marginBottom: spacing.lg,
               }}
             >
               <View>
-                <Text
-                  style={{
-                    ...font.footnote,
-                    color: colors.textSecondary,
-                    marginBottom: 4,
-                  }}
-                >
+                <Text style={{ ...font.caption1, color: "rgba(255,255,255,0.8)" }}>
                   Weekly Budget
                 </Text>
                 <Text
                   selectable
                   style={{
                     fontSize: 34,
-                    fontWeight: "700",
-                    color: colors.textPrimary,
+                    fontWeight: "800",
+                    color: "#FFFFFF",
                     fontVariant: ["tabular-nums"],
-                    letterSpacing: 0.4,
+                    marginTop: 2,
                   }}
                 >
                   ${weeklyBudget.toFixed(0)}
                 </Text>
               </View>
-              <View style={{ alignItems: "flex-end" }}>
-                <Text
-                  style={{
-                    ...font.footnote,
-                    color: colors.textSecondary,
-                    marginBottom: 4,
-                  }}
-                >
+
+              <View
+                style={{
+                  backgroundColor: "rgba(255,255,255,0.18)",
+                  borderRadius: radius.md,
+                  borderCurve: "continuous",
+                  paddingHorizontal: 12,
+                  paddingVertical: 8,
+                  alignItems: "flex-end",
+                }}
+              >
+                <Text style={{ ...font.caption2, color: "rgba(255,255,255,0.75)", textTransform: "uppercase" }}>
                   Remaining
                 </Text>
                 <Text
                   selectable
                   style={{
-                    ...font.title1,
-                    color: isOverBudget ? colors.danger : colors.success,
+                    ...font.subhead,
+                    color: "#FFFFFF",
+                    fontWeight: "800",
+                    marginTop: 2,
                     fontVariant: ["tabular-nums"],
                   }}
                 >
@@ -244,25 +296,25 @@ export default function BudgetScreen() {
               </View>
             </View>
 
-            <View style={{ marginBottom: spacing.sm }}>
-              <ProgressBar
-                value={spentPercentage}
-                color={barColor}
-                trackColor={colors.surfaceSecondary}
-                height={10}
-              />
-            </View>
+            <ProgressBar
+              value={spentPercentage}
+              color="#FFFFFF"
+              trackColor="rgba(255,255,255,0.28)"
+              height={9}
+            />
 
             <View
               style={{
                 flexDirection: "row",
                 justifyContent: "space-between",
+                marginTop: spacing.sm,
               }}
             >
               <Text
+                selectable
                 style={{
                   ...font.caption1,
-                  color: colors.textTertiary,
+                  color: "rgba(255,255,255,0.82)",
                   fontVariant: ["tabular-nums"],
                 }}
               >
@@ -271,190 +323,113 @@ export default function BudgetScreen() {
               <Text
                 style={{
                   ...font.caption1,
-                  color: colors.textTertiary,
+                  color: "rgba(255,255,255,0.82)",
                   fontVariant: ["tabular-nums"],
                 }}
               >
                 {spentPercentage.toFixed(0)}%
               </Text>
             </View>
-          </View>
+          </LinearGradient>
         </Animated.View>
 
-        {/* ── Category Breakdown ──────────────────────────────── */}
-        {activeCats.length > 0 && (
-          <Animated.View entering={FadeInDown.delay(100).duration(300)}>
+        {activeCats.length > 0 ? (
+          <Animated.View entering={FadeInDown.delay(80).duration(300)} style={{ marginTop: spacing.lg }}>
             <View
               style={{
-                backgroundColor: colors.surface,
-                borderRadius: radius.md,
+                backgroundColor: "#FFFFFF",
+                borderRadius: radius.lg,
                 borderCurve: "continuous",
+                borderWidth: 1,
+                borderColor: "#E4EAFF",
                 padding: spacing.lg,
-                marginBottom: spacing.lg,
               }}
             >
-              <Text
-                style={{
-                  ...font.headline,
-                  color: colors.textPrimary,
-                  marginBottom: spacing.md,
-                }}
-              >
-                Categories
-              </Text>
-
-              {/* Stacked bar */}
               <View
                 style={{
                   flexDirection: "row",
-                  height: 10,
-                  borderRadius: 5,
-                  overflow: "hidden",
-                  backgroundColor: colors.surfaceSecondary,
-                  marginBottom: spacing.lg,
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: spacing.md,
                 }}
               >
-                {activeCats.map((cat) => {
-                  const pct =
-                    totalSpent > 0
-                      ? (categoryTotals[cat] / totalSpent) * 100
-                      : 0;
-                  return (
-                    <View
-                      key={cat}
-                      style={{
-                        width: `${pct}%`,
-                        backgroundColor: categoryColors[cat],
-                        height: "100%",
-                      }}
-                    />
-                  );
-                })}
+                <Text style={{ ...font.title3, color: colors.textPrimary, fontWeight: "700" }}>
+                  Category Breakdown
+                </Text>
+                <View
+                  style={{
+                    backgroundColor: "#EDF4FF",
+                    borderRadius: radius.full,
+                    borderCurve: "continuous",
+                    paddingHorizontal: 10,
+                    paddingVertical: 4,
+                  }}
+                >
+                  <Text
+                    style={{
+                      ...font.footnote,
+                      color: colors.primary,
+                      fontWeight: "700",
+                      fontVariant: ["tabular-nums"],
+                    }}
+                  >
+                    {activeCats.length}
+                  </Text>
+                </View>
               </View>
 
-              {(Object.keys(categoryTotals) as BudgetCategory[]).map(
-                (cat, index) => {
-                  const isLast =
-                    index ===
-                    Object.keys(categoryTotals).length - 1;
-                  return (
-                    <View
-                      key={cat}
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        paddingVertical: spacing.sm + 2,
-                        borderBottomWidth: isLast ? 0 : 0.5,
-                        borderBottomColor: colors.borderLight,
-                      }}
-                    >
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          gap: spacing.md,
-                        }}
-                      >
-                        <View
-                          style={{
-                            width: 30,
-                            height: 30,
-                            borderRadius: 8,
-                            borderCurve: "continuous",
-                            backgroundColor: categoryColors[cat] + "20",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <SymbolView
-                            name={CATEGORY_ICONS[cat] as any}
-                            size={14}
-                            tintColor={categoryColors[cat]}
-                          />
-                        </View>
-                        <Text
-                          style={{
-                            ...font.subhead,
-                            fontWeight: "500",
-                            color: colors.textPrimary,
-                          }}
-                        >
-                          {CATEGORY_LABELS[cat]}
-                        </Text>
-                      </View>
-                      <Text
-                        selectable
-                        style={{
-                          ...font.subhead,
-                          fontWeight: "600",
-                          color: colors.textPrimary,
-                          fontVariant: ["tabular-nums"],
-                        }}
-                      >
-                        ${categoryTotals[cat].toFixed(2)}
-                      </Text>
-                    </View>
-                  );
-                }
-              )}
+              {(Object.keys(categoryTotals) as BudgetCategory[]).map((cat, index) => {
+                const isLast = index === Object.keys(categoryTotals).length - 1;
+                return (
+                  <CategoryRow
+                    key={cat}
+                    category={cat}
+                    value={categoryTotals[cat]}
+                    totalSpent={totalSpent}
+                    isLast={isLast}
+                  />
+                );
+              })}
             </View>
           </Animated.View>
-        )}
+        ) : null}
 
-        {/* ── Expenses ────────────────────────────────────────── */}
-        <Animated.View entering={FadeInDown.delay(200).duration(300)}>
-          <Text
+        <Animated.View entering={FadeInDown.delay(140).duration(300)} style={{ marginTop: spacing.lg }}>
+          <View
             style={{
-              ...font.title3,
-              color: colors.textPrimary,
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
               marginBottom: spacing.md,
             }}
           >
-            Expenses
-          </Text>
-
-          {grouped.length === 0 && (
-            <View
-              style={{
-                backgroundColor: colors.surface,
-                borderRadius: radius.md,
-                borderCurve: "continuous",
-                alignItems: "center",
-                paddingVertical: spacing.xxl,
-              }}
-            >
-              <SymbolView
-                name="tray"
-                size={40}
-                tintColor={colors.textTertiary}
-              />
-              <Text
-                style={{
-                  ...font.subhead,
-                  color: colors.textSecondary,
-                  marginTop: spacing.md,
-                }}
-              >
-                No expenses yet
+            <View>
+              <Text style={{ ...font.title3, color: colors.textPrimary, fontWeight: "700" }}>
+                Expenses
+              </Text>
+              <Text style={{ ...font.caption1, color: colors.textSecondary, marginTop: 2 }}>
+                Track each transaction with category context
               </Text>
             </View>
-          )}
+          </View>
+
+          {grouped.length === 0 ? <EmptyState icon="tray" title="No expenses yet" /> : null}
 
           {grouped.map((group, gi) => (
             <Animated.View
               key={group.label}
-              entering={FadeInDown.delay(250 + gi * 60).duration(250)}
-              layout={LinearTransition.duration(250)}
+              entering={FadeInDown.delay(190 + gi * 55).duration(250)}
+              layout={LinearTransition.duration(230)}
+              style={{ marginTop: gi > 0 ? spacing.lg : 0 }}
             >
               <Text
                 style={{
                   ...font.footnote,
-                  fontWeight: "600",
                   color: colors.textSecondary,
                   textTransform: "uppercase",
+                  letterSpacing: 0.8,
                   marginBottom: spacing.sm,
-                  marginTop: gi > 0 ? spacing.lg : 0,
+                  fontWeight: "700",
                 }}
               >
                 {group.label}
@@ -462,9 +437,11 @@ export default function BudgetScreen() {
 
               <View
                 style={{
-                  backgroundColor: colors.surface,
-                  borderRadius: radius.md,
+                  backgroundColor: "#FFFFFF",
+                  borderRadius: radius.lg,
                   borderCurve: "continuous",
+                  borderWidth: 1,
+                  borderColor: "#E7ECFF",
                   overflow: "hidden",
                 }}
               >
@@ -474,7 +451,7 @@ export default function BudgetScreen() {
                     <Animated.View
                       key={entry.id}
                       exiting={FadeOut.duration(200)}
-                      layout={LinearTransition.duration(250)}
+                      layout={LinearTransition.duration(230)}
                     >
                       <View
                         style={{
@@ -490,8 +467,7 @@ export default function BudgetScreen() {
                             height: 40,
                             borderRadius: 12,
                             borderCurve: "continuous",
-                            backgroundColor:
-                              categoryColors[entry.category] + "20",
+                            backgroundColor: `${categoryColors[entry.category]}20`,
                             alignItems: "center",
                             justifyContent: "center",
                             marginRight: spacing.md,
@@ -503,28 +479,23 @@ export default function BudgetScreen() {
                             tintColor={categoryColors[entry.category]}
                           />
                         </View>
+
                         <View style={{ flex: 1 }}>
                           <Text
                             style={{
                               ...font.subhead,
-                              fontWeight: "500",
+                              fontWeight: "600",
                               color: colors.textPrimary,
                             }}
                             numberOfLines={1}
                           >
-                            {entry.description ??
-                              CATEGORY_LABELS[entry.category]}
+                            {entry.description ?? CATEGORY_LABELS[entry.category]}
                           </Text>
-                          <Text
-                            style={{
-                              ...font.caption1,
-                              color: colors.textTertiary,
-                              marginTop: 2,
-                            }}
-                          >
+                          <Text style={{ ...font.caption1, color: colors.textSecondary, marginTop: 2 }}>
                             {CATEGORY_LABELS[entry.category]}
                           </Text>
                         </View>
+
                         <Text
                           selectable
                           style={{
@@ -536,32 +507,32 @@ export default function BudgetScreen() {
                         >
                           -${Number(entry.amount).toFixed(2)}
                         </Text>
+
                         <Pressable
                           onPress={() => handleDeleteExpense(entry.id)}
                           hitSlop={8}
+                          accessibilityRole="button"
+                          accessibilityLabel="Delete expense"
                           style={({ pressed }) => ({
-                            opacity: pressed ? 0.5 : 1,
+                            opacity: pressed ? 0.45 : 1,
                             padding: 4,
                           })}
                         >
-                          <SymbolView
-                            name="trash"
-                            size={16}
-                            tintColor={colors.textTertiary}
-                          />
+                          <SymbolView name="trash" size={16} tintColor={colors.textTertiary} />
                         </Pressable>
-                        {!isLast && (
+
+                        {!isLast ? (
                           <View
                             style={{
                               position: "absolute",
                               bottom: 0,
                               left: 68,
                               right: 0,
-                              height: 0.5,
-                              backgroundColor: colors.borderLight,
+                              height: 1,
+                              backgroundColor: "#EEF2FF",
                             }}
                           />
-                        )}
+                        ) : null}
                       </View>
                     </Animated.View>
                   );
@@ -572,7 +543,6 @@ export default function BudgetScreen() {
         </Animated.View>
       </ScrollView>
 
-      {/* FAB */}
       <Pressable
         onPress={() => {
           if (process.env.EXPO_OS === "ios") {
@@ -580,22 +550,33 @@ export default function BudgetScreen() {
           }
           router.push("/(budget)/add-expense");
         }}
+        accessibilityRole="button"
+        accessibilityLabel="Add expense"
         style={({ pressed }) => ({
           position: "absolute",
           bottom: 100,
           right: spacing.lg,
-          width: 56,
-          height: 56,
-          borderRadius: 28,
-          backgroundColor: colors.primary,
-          alignItems: "center",
-          justifyContent: "center",
-          boxShadow: `0 6px 20px ${colors.primary}50`,
-          opacity: pressed ? 0.8 : 1,
+          opacity: pressed ? 0.82 : 1,
           transform: [{ scale: pressed ? 0.95 : 1 }],
         })}
       >
-        <SymbolView name="plus" size={24} tintColor="#FFFFFF" />
+        <LinearGradient
+          colors={["#655EFF", "#2C84F6"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{
+            width: 58,
+            height: 58,
+            borderRadius: 29,
+            borderCurve: "continuous",
+            alignItems: "center",
+            justifyContent: "center",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.45)",
+          }}
+        >
+          <SymbolView name="plus" size={24} tintColor="#FFFFFF" />
+        </LinearGradient>
       </Pressable>
     </View>
   );

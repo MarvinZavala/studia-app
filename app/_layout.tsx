@@ -50,7 +50,12 @@ function RootLayoutNav() {
   }
 
   return (
-    <NativeTabs minimizeBehavior="onScrollDown">
+    <NativeTabs
+      minimizeBehavior="onScrollDown"
+      disableTransparentOnScrollEdge
+      backgroundColor={colors.surface}
+      shadowColor={colors.borderLight}
+    >
       <NativeTabs.Trigger name="(auth)" hidden />
       <NativeTabs.Trigger name="(home)">
         <Icon sf={{ default: "house", selected: "house.fill" }} />

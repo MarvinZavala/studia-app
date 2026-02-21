@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -6,131 +6,216 @@ import {
   Alert,
   Pressable,
   TextInput,
+  Platform,
 } from "react-native";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { useFocusEffect } from "expo-router";
 import { SymbolView } from "expo-symbols";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import Slider from "@react-native-community/slider";
 
 import { colors, spacing, radius, font } from "@/lib/theme";
+import { ProgressBar } from "@/components/ui/progress-bar";
 import { useTimerStore } from "@/lib/stores/timer-store";
 import { useAuth } from "@/lib/auth-context";
-import { supabase } from "@/lib/supabase";
+import { SectionLabel } from "@/components/settings/section-label";
+import { SettingCell } from "@/components/settings/setting-cell";
+import {
+  clearCompletedTasks,
+  countCompletedTasks,
+  getBudgetSettings,
+  getProfileDisplayName,
+  getStreak,
+  listStudySessionsForUser,
+  resetCurrentStreak,
+  updateProfileDisplayName,
+  upsertWeeklyBudget,
+} from "@/lib/data/studia-api";
 
 const APP_VERSION = "1.0.0";
 
-// ─── Grouped Cell ───────────────────────────────────────────────
-function Cell({
-  icon,
-  iconColor,
-  iconBg,
-  label,
-  value,
-  onPress,
-  isDestructive,
-  isFirst,
-  isLast,
-}: {
+const settingsFonts = {
+  heading: Platform.select({
+    ios: "AvenirNext-DemiBold",
+    android: "sans-serif-medium",
+    default: undefined,
+  }),
+  body: Platform.select({
+    ios: "AvenirNext-Regular",
+    android: "sans-serif",
+    default: undefined,
+  }),
+};
+
+interface StatTileProps {
+  label: string;
+  value: string;
   icon: string;
   iconColor: string;
   iconBg: string;
-  label: string;
-  value?: string;
-  onPress?: () => void;
-  isDestructive?: boolean;
-  isFirst?: boolean;
-  isLast?: boolean;
-}) {
+}
+
+function StatTile({ label, value, icon, iconColor, iconBg }: StatTileProps) {
   return (
-    <Pressable
-      onPress={onPress}
-      disabled={!onPress}
-      style={({ pressed }) => ({
-        flexDirection: "row",
-        alignItems: "center",
-        backgroundColor: pressed && onPress ? colors.surfaceSecondary : colors.surface,
-        paddingVertical: spacing.md,
-        paddingHorizontal: spacing.lg,
-        borderTopLeftRadius: isFirst ? radius.md : 0,
-        borderTopRightRadius: isFirst ? radius.md : 0,
-        borderBottomLeftRadius: isLast ? radius.md : 0,
-        borderBottomRightRadius: isLast ? radius.md : 0,
+    <View
+      style={{
+        width: "48.4%",
+        backgroundColor: colors.surface,
+        borderRadius: radius.md,
         borderCurve: "continuous",
-      })}
+        borderWidth: 1,
+        borderColor: colors.borderLight,
+        padding: spacing.md,
+        gap: 6,
+      }}
     >
       <View
         style={{
-          width: 30,
-          height: 30,
-          borderRadius: 7,
+          width: 34,
+          height: 34,
+          borderRadius: 10,
           borderCurve: "continuous",
           backgroundColor: iconBg,
           alignItems: "center",
           justifyContent: "center",
-          marginRight: spacing.md,
         }}
       >
         <SymbolView name={icon as any} size={16} tintColor={iconColor} />
       </View>
       <Text
+        selectable
         style={{
-          ...font.body,
-          flex: 1,
-          color: isDestructive ? colors.danger : colors.textPrimary,
+          ...font.title3,
+          color: colors.textPrimary,
+          fontVariant: ["tabular-nums"],
+          fontFamily: settingsFonts.heading,
+        }}
+      >
+        {value}
+      </Text>
+      <Text
+        style={{
+          ...font.caption1,
+          color: colors.textSecondary,
+          fontFamily: settingsFonts.body,
         }}
       >
         {label}
       </Text>
-      {value && (
-        <Text
-          selectable
-          style={{
-            ...font.body,
-            color: colors.textSecondary,
-            fontVariant: ["tabular-nums"],
-            marginRight: onPress ? spacing.xs : 0,
-          }}
-        >
-          {value}
-        </Text>
-      )}
-      {onPress && !isDestructive && (
-        <SymbolView name="chevron.right" size={14} tintColor={colors.textTertiary} />
-      )}
-      {!isLast && (
-        <View
-          style={{
-            position: "absolute",
-            bottom: 0,
-            left: 62,
-            right: 0,
-            height: 0.5,
-            backgroundColor: colors.separator,
-          }}
-        />
-      )}
-    </Pressable>
+    </View>
   );
 }
 
-// ─── Section Header ─────────────────────────────────────────────
-function SectionLabel({ title, delay }: { title: string; delay: number }) {
+interface SliderPanelProps {
+  title: string;
+  subtitle: string;
+  icon: string;
+  tint: string;
+  valueLabel: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  onValueChange: (value: number) => void;
+  onSlidingComplete?: (value: number) => void;
+}
+
+function SliderPanel({
+  title,
+  subtitle,
+  icon,
+  tint,
+  valueLabel,
+  min,
+  max,
+  step,
+  value,
+  onValueChange,
+  onSlidingComplete,
+}: SliderPanelProps) {
   return (
-    <Animated.View entering={FadeInDown.delay(delay).duration(300)}>
-      <Text
+    <View style={{ paddingVertical: spacing.md + 2 }}>
+      <View
         style={{
-          ...font.footnote,
-          color: colors.textSecondary,
-          textTransform: "uppercase",
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
           marginBottom: spacing.sm,
-          marginLeft: spacing.lg,
-          marginTop: spacing.xl,
         }}
       >
-        {title}
-      </Text>
-    </Animated.View>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+          <View
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 10,
+              borderCurve: "continuous",
+              backgroundColor: `${tint}22`,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <SymbolView name={icon as any} size={16} tintColor={tint} />
+          </View>
+          <View>
+            <Text
+              style={{
+                ...font.subhead,
+                color: colors.textPrimary,
+                fontWeight: "600",
+                fontFamily: settingsFonts.heading,
+              }}
+            >
+              {title}
+            </Text>
+            <Text
+              style={{
+                ...font.caption1,
+                color: colors.textSecondary,
+                fontFamily: settingsFonts.body,
+              }}
+            >
+              {subtitle}
+            </Text>
+          </View>
+        </View>
+
+        <View
+          style={{
+            backgroundColor: `${tint}22`,
+            borderRadius: radius.full,
+            borderCurve: "continuous",
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+          }}
+        >
+          <Text
+            selectable
+            style={{
+              ...font.footnote,
+              color: tint,
+              fontWeight: "700",
+              fontVariant: ["tabular-nums"],
+            }}
+          >
+            {valueLabel}
+          </Text>
+        </View>
+      </View>
+
+      <Slider
+        minimumValue={min}
+        maximumValue={max}
+        step={step}
+        value={value}
+        onValueChange={onValueChange}
+        onSlidingComplete={onSlidingComplete}
+        minimumTrackTintColor={tint}
+        maximumTrackTintColor={colors.borderLight}
+        thumbTintColor={tint}
+      />
+    </View>
   );
 }
 
@@ -143,12 +228,25 @@ export default function SettingsScreen() {
   const [editNameValue, setEditNameValue] = useState("");
   const [studyHoursPerDay, setStudyHoursPerDay] = useState(4);
   const [weeklyBudget, setWeeklyBudget] = useState(100);
+  const [savedWeeklyBudget, setSavedWeeklyBudget] = useState(100);
 
   const [totalStudyHours, setTotalStudyHours] = useState(0);
   const [totalTasks, setTotalTasks] = useState(0);
   const [currentStreak, setCurrentStreak] = useState(0);
   const [longestStreak, setLongestStreak] = useState(0);
   const [memberSince, setMemberSince] = useState("");
+
+  const momentumScore = useMemo(() => {
+    const raw = currentStreak * 8 + totalStudyHours * 1.5 + totalTasks * 3;
+    return Math.min(100, Math.max(12, Math.round(raw)));
+  }, [currentStreak, totalStudyHours, totalTasks]);
+
+  const momentumTone =
+    momentumScore >= 75
+      ? colors.success
+      : momentumScore >= 45
+        ? colors.warning
+        : colors.secondary;
 
   useFocusEffect(
     useCallback(() => {
@@ -166,58 +264,74 @@ export default function SettingsScreen() {
       })
     );
 
-    const { data: profile } = await supabase
-      .from("studia_profiles")
-      .select("display_name")
-      .maybeSingle();
-    if (profile?.display_name) setDisplayName(profile.display_name);
-
     try {
       const stored = localStorage.getItem("studentos_study_hours");
       if (stored) setStudyHoursPerDay(parseFloat(stored));
-    } catch {}
+    } catch {
+      // ignore local settings parse issues
+    }
 
-    const { data: budgetSettings } = await supabase
-      .from("studia_budget_settings")
-      .select("weekly_budget")
-      .maybeSingle();
-    if (budgetSettings) setWeeklyBudget(budgetSettings.weekly_budget);
+    try {
+      const [name, budgetSettings, sessions, completedTasks, streak] =
+        await Promise.all([
+          getProfileDisplayName(user.id),
+          getBudgetSettings(user.id),
+          listStudySessionsForUser(user.id),
+          countCompletedTasks(user.id),
+          getStreak(user.id),
+        ]);
 
-    const { data: sessions } = await supabase
-      .from("studia_study_sessions")
-      .select("duration_minutes");
-    const totalMins = (sessions ?? []).reduce(
-      (sum: number, s: any) => sum + (s.duration_minutes ?? 0),
-      0
-    );
-    setTotalStudyHours(Math.round(totalMins / 60));
+      if (name) setDisplayName(name);
+      if (budgetSettings) {
+        setWeeklyBudget(budgetSettings.weekly_budget);
+        setSavedWeeklyBudget(budgetSettings.weekly_budget);
+      }
 
-    const { data: tasks } = await supabase
-      .from("studia_tasks")
-      .select("id")
-      .eq("status", "completed");
-    setTotalTasks(tasks?.length ?? 0);
+      const totalMins = sessions.reduce(
+        (sum, session) => sum + (session.duration_minutes ?? 0),
+        0
+      );
 
-    const { data: streak } = await supabase
-      .from("studia_streaks")
-      .select("current_streak, longest_streak")
-      .maybeSingle();
-    setCurrentStreak(streak?.current_streak ?? 0);
-    setLongestStreak(streak?.longest_streak ?? 0);
+      setTotalStudyHours(Math.round(totalMins / 60));
+      setTotalTasks(completedTasks);
+      setCurrentStreak(streak?.current_streak ?? 0);
+      setLongestStreak(streak?.longest_streak ?? 0);
+    } catch {
+      setTotalStudyHours(0);
+      setTotalTasks(0);
+      setCurrentStreak(0);
+      setLongestStreak(0);
+    }
   }
 
-  function handleStudyHoursChange(value: number) {
+  function handleStudyHoursPreview(value: number) {
+    const rounded = Math.round(value * 2) / 2;
+    setStudyHoursPerDay(rounded);
+  }
+
+  function handleStudyHoursCommit(value: number) {
     const rounded = Math.round(value * 2) / 2;
     setStudyHoursPerDay(rounded);
     localStorage.setItem("studentos_study_hours", String(rounded));
   }
 
-  async function handleWeeklyBudgetChange(value: number) {
+  function handleWeeklyBudgetPreview(value: number) {
     const rounded = Math.round(value / 5) * 5;
     setWeeklyBudget(rounded);
-    await supabase
-      .from("studia_budget_settings")
-      .upsert({ user_id: user?.id, weekly_budget: rounded });
+  }
+
+  async function handleWeeklyBudgetCommit(value: number) {
+    const rounded = Math.round(value / 5) * 5;
+    setWeeklyBudget(rounded);
+    if (!user?.id || rounded === savedWeeklyBudget) return;
+
+    try {
+      await upsertWeeklyBudget(user.id, rounded);
+      setSavedWeeklyBudget(rounded);
+    } catch {
+      Alert.alert("Could not save budget", "Please try again in a moment.");
+      setWeeklyBudget(savedWeeklyBudget);
+    }
   }
 
   function handleStartEditName() {
@@ -230,22 +344,29 @@ export default function SettingsScreen() {
 
   async function handleSaveName() {
     const trimmed = editNameValue.trim();
-    if (!trimmed) return;
+    if (!trimmed || !user?.id) return;
+
     if (process.env.EXPO_OS === "ios") {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
+
+    const previousName = displayName;
     setDisplayName(trimmed);
     setIsEditingName(false);
-    await supabase
-      .from("studia_profiles")
-      .update({ display_name: trimmed })
-      .eq("id", user?.id);
+
+    try {
+      await updateProfileDisplayName(user.id, trimmed);
+    } catch {
+      setDisplayName(previousName);
+      Alert.alert("Could not update name", "Please try again.");
+    }
   }
 
   function handleResetStreak() {
     if (process.env.EXPO_OS === "ios") {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
+
     Alert.alert(
       "Reset Streak",
       "This will reset your current study streak to 0. This action cannot be undone.",
@@ -255,11 +376,13 @@ export default function SettingsScreen() {
           text: "Reset",
           style: "destructive",
           onPress: async () => {
-            await supabase
-              .from("studia_streaks")
-              .update({ current_streak: 0 })
-              .eq("user_id", user?.id);
-            setCurrentStreak(0);
+            if (!user?.id) return;
+            try {
+              await resetCurrentStreak(user.id);
+              setCurrentStreak(0);
+            } catch {
+              Alert.alert("Could not reset streak", "Please try again.");
+            }
           },
         },
       ]
@@ -270,6 +393,7 @@ export default function SettingsScreen() {
     if (process.env.EXPO_OS === "ios") {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
+
     Alert.alert(
       "Clear Completed Tasks",
       "Remove all completed tasks from your planner? Active tasks will not be affected.",
@@ -279,16 +403,15 @@ export default function SettingsScreen() {
           text: "Clear",
           style: "destructive",
           onPress: async () => {
-            await supabase
-              .from("studia_tasks")
-              .delete()
-              .eq("user_id", user?.id)
-              .eq("status", "completed");
-            setTotalTasks(0);
-            if (process.env.EXPO_OS === "ios") {
-              Haptics.notificationAsync(
-                Haptics.NotificationFeedbackType.Success
-              );
+            if (!user?.id) return;
+            try {
+              await clearCompletedTasks(user.id);
+              setTotalTasks(0);
+              if (process.env.EXPO_OS === "ios") {
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              }
+            } catch {
+              Alert.alert("Could not clear tasks", "Please try again.");
             }
           },
         },
@@ -300,6 +423,7 @@ export default function SettingsScreen() {
     if (process.env.EXPO_OS === "ios") {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
+
     Alert.alert("Sign Out", "Are you sure you want to sign out?", [
       { text: "Cancel", style: "cancel" },
       {
@@ -310,385 +434,351 @@ export default function SettingsScreen() {
     ]);
   }
 
+  const stats = [
+    {
+      label: "Hours Studied",
+      value: `${totalStudyHours}h`,
+      icon: "book.fill",
+      iconColor: colors.primary,
+      iconBg: colors.primaryLight,
+    },
+    {
+      label: "Completed",
+      value: `${totalTasks}`,
+      icon: "checkmark.circle.fill",
+      iconColor: colors.success,
+      iconBg: colors.successLight,
+    },
+    {
+      label: "Current Streak",
+      value: `${currentStreak}d`,
+      icon: "flame.fill",
+      iconColor: colors.warning,
+      iconBg: colors.warningLight,
+    },
+    {
+      label: "Best Streak",
+      value: `${longestStreak}d`,
+      icon: "trophy.fill",
+      iconColor: "#B983FF",
+      iconBg: "#F2E9FF",
+    },
+  ];
+
   return (
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
       style={{ flex: 1, backgroundColor: colors.background }}
-      contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: 100 }}
+      contentContainerStyle={{
+        paddingHorizontal: spacing.lg,
+        paddingBottom: 110,
+      }}
       showsVerticalScrollIndicator={false}
     >
-      {/* ── Profile Card ──────────────────────────────────────── */}
-      <Animated.View entering={FadeIn.duration(400)}>
-        <View
+      <Animated.View entering={FadeIn.duration(380)}>
+        <LinearGradient
+          colors={[colors.primaryDark, colors.primary]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
           style={{
-            backgroundColor: colors.surface,
-            borderRadius: radius.md,
+            borderRadius: radius.xl,
             borderCurve: "continuous",
             padding: spacing.lg,
             marginTop: spacing.lg,
-            flexDirection: "row",
-            alignItems: "center",
-            gap: spacing.lg,
+            overflow: "hidden",
           }}
         >
-          {/* Avatar */}
           <View
             style={{
-              width: 60,
-              height: 60,
-              borderRadius: 30,
-              backgroundColor: colors.primary,
-              alignItems: "center",
-              justifyContent: "center",
+              position: "absolute",
+              top: -28,
+              right: -18,
+              width: 120,
+              height: 120,
+              borderRadius: 60,
+              backgroundColor: "rgba(255,255,255,0.12)",
             }}
-          >
-            <Text
-              style={{
-                fontSize: 26,
-                fontWeight: "700",
-                color: "#FFFFFF",
-              }}
-            >
-              {displayName.charAt(0).toUpperCase()}
-            </Text>
-          </View>
+          />
 
-          <View style={{ flex: 1 }}>
-            {isEditingName ? (
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: spacing.sm,
-                }}
-              >
-                <TextInput
-                  value={editNameValue}
-                  onChangeText={setEditNameValue}
-                  autoFocus
-                  style={{
-                    ...font.title3,
-                    color: colors.textPrimary,
-                    backgroundColor: colors.surfaceSecondary,
-                    borderRadius: radius.sm,
-                    borderCurve: "continuous",
-                    paddingVertical: 6,
-                    paddingHorizontal: spacing.md,
-                    flex: 1,
-                  }}
-                  returnKeyType="done"
-                  onSubmitEditing={handleSaveName}
-                />
-                <Pressable
-                  onPress={handleSaveName}
-                  style={({ pressed }) => ({
-                    opacity: pressed ? 0.6 : 1,
-                    backgroundColor: colors.primary,
-                    borderRadius: 8,
-                    borderCurve: "continuous",
-                    padding: 8,
-                  })}
-                >
-                  <SymbolView name="checkmark" size={14} tintColor="#FFFFFF" />
-                </Pressable>
-              </View>
-            ) : (
-              <Pressable
-                onPress={handleStartEditName}
-                style={({ pressed }) => ({
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 6,
-                  opacity: pressed ? 0.6 : 1,
-                })}
-              >
-                <Text
-                  style={{
-                    ...font.title3,
-                    color: colors.textPrimary,
-                  }}
-                >
-                  {displayName}
-                </Text>
-                <SymbolView
-                  name="pencil.circle.fill"
-                  size={18}
-                  tintColor={colors.textTertiary}
-                />
-              </Pressable>
-            )}
-            <Text
-              style={{
-                ...font.subhead,
-                color: colors.textSecondary,
-                marginTop: 2,
-              }}
-            >
-              {userEmail}
-            </Text>
-            <Text
-              style={{
-                ...font.caption1,
-                color: colors.textTertiary,
-                marginTop: 2,
-              }}
-            >
-              Member since {memberSince}
-            </Text>
-          </View>
-        </View>
-      </Animated.View>
-
-      {/* ── Stats Row ─────────────────────────────────────────── */}
-      <Animated.View
-        entering={FadeInDown.delay(50).duration(300)}
-        style={{
-          flexDirection: "row",
-          gap: spacing.sm,
-          marginTop: spacing.lg,
-        }}
-      >
-        {[
-          { label: "Studied", value: `${totalStudyHours}h`, icon: "book.fill", iconColor: colors.primary, bg: colors.primaryLight },
-          { label: "Done", value: String(totalTasks), icon: "checkmark.circle.fill", iconColor: colors.success, bg: colors.successLight },
-          { label: "Streak", value: String(currentStreak), icon: "flame.fill", iconColor: colors.warning, bg: colors.warningLight },
-          { label: "Best", value: String(longestStreak), icon: "trophy.fill", iconColor: "#AF52DE", bg: "#F5EDFC" },
-        ].map((stat, i) => (
-          <View
-            key={stat.label}
-            style={{
-              flex: 1,
-              backgroundColor: colors.surface,
-              borderRadius: radius.md,
-              borderCurve: "continuous",
-              paddingVertical: spacing.md,
-              alignItems: "center",
-              gap: 6,
-            }}
-          >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
             <View
               style={{
-                width: 32,
-                height: 32,
-                borderRadius: 10,
-                borderCurve: "continuous",
-                backgroundColor: stat.bg,
+                width: 62,
+                height: 62,
+                borderRadius: 31,
+                borderWidth: 2,
+                borderColor: "rgba(255,255,255,0.3)",
+                backgroundColor: "rgba(255,255,255,0.2)",
                 alignItems: "center",
                 justifyContent: "center",
               }}
             >
-              <SymbolView name={stat.icon as any} size={16} tintColor={stat.iconColor} />
+              <Text
+                style={{
+                  fontSize: 26,
+                  color: "#FFFFFF",
+                  fontFamily: settingsFonts.heading,
+                }}
+              >
+                {displayName.charAt(0).toUpperCase()}
+              </Text>
             </View>
-            <Text
-              selectable
+
+            <View style={{ flex: 1 }}>
+              {isEditingName ? (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+                  <TextInput
+                    value={editNameValue}
+                    onChangeText={setEditNameValue}
+                    autoFocus
+                    style={{
+                      ...font.subhead,
+                      color: "#FFFFFF",
+                      backgroundColor: "rgba(255,255,255,0.2)",
+                      borderRadius: radius.sm,
+                      borderCurve: "continuous",
+                      paddingVertical: 8,
+                      paddingHorizontal: spacing.md,
+                      flex: 1,
+                      fontFamily: settingsFonts.body,
+                    }}
+                    placeholder="Your name"
+                    placeholderTextColor="rgba(255,255,255,0.7)"
+                    returnKeyType="done"
+                    onSubmitEditing={handleSaveName}
+                  />
+                  <Pressable
+                    onPress={handleSaveName}
+                    style={({ pressed }) => ({
+                      opacity: pressed ? 0.7 : 1,
+                      backgroundColor: "rgba(255,255,255,0.22)",
+                      borderRadius: radius.sm,
+                      borderCurve: "continuous",
+                      padding: 9,
+                    })}
+                  >
+                    <SymbolView name="checkmark" size={14} tintColor="#FFFFFF" />
+                  </Pressable>
+                </View>
+              ) : (
+                <Pressable
+                  onPress={handleStartEditName}
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit display name"
+                  style={({ pressed }) => ({
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 6,
+                    opacity: pressed ? 0.7 : 1,
+                  })}
+                >
+                  <Text
+                    style={{
+                      ...font.title3,
+                      color: "#FFFFFF",
+                      fontFamily: settingsFonts.heading,
+                    }}
+                  >
+                    {displayName}
+                  </Text>
+                  <SymbolView name="pencil.circle.fill" size={17} tintColor="rgba(255,255,255,0.85)" />
+                </Pressable>
+              )}
+
+              <Text
+                style={{
+                  ...font.caption1,
+                  color: "rgba(255,255,255,0.8)",
+                  marginTop: 4,
+                  fontFamily: settingsFonts.body,
+                }}
+                numberOfLines={1}
+              >
+                {userEmail}
+              </Text>
+              <Text
+                style={{
+                  ...font.caption2,
+                  color: "rgba(255,255,255,0.75)",
+                  marginTop: 2,
+                  fontFamily: settingsFonts.body,
+                }}
+              >
+                Member since {memberSince}
+              </Text>
+            </View>
+          </View>
+
+          <View style={{ marginTop: spacing.md + 2 }}>
+            <View
               style={{
-                ...font.headline,
-                fontWeight: "700",
-                color: colors.textPrimary,
-                fontVariant: ["tabular-nums"],
+                flexDirection: "row",
+                justifyContent: "space-between",
+                marginBottom: spacing.sm,
               }}
             >
-              {stat.value}
-            </Text>
-            <Text style={{ ...font.caption2, color: colors.textTertiary }}>
-              {stat.label}
-            </Text>
+              <Text
+                style={{
+                  ...font.caption1,
+                  color: "rgba(255,255,255,0.82)",
+                  fontFamily: settingsFonts.body,
+                }}
+              >
+                Momentum Score
+              </Text>
+              <Text
+                selectable
+                style={{
+                  ...font.caption1,
+                  color: "#FFFFFF",
+                  fontWeight: "700",
+                  fontVariant: ["tabular-nums"],
+                }}
+              >
+                {momentumScore}/100
+              </Text>
+            </View>
+            <ProgressBar
+              value={momentumScore}
+              color="#FFFFFF"
+              trackColor="rgba(255,255,255,0.28)"
+              height={7}
+            />
           </View>
+        </LinearGradient>
+      </Animated.View>
+
+      <Animated.View
+        entering={FadeInDown.delay(60).duration(340)}
+        style={{
+          marginTop: spacing.md,
+          flexDirection: "row",
+          flexWrap: "wrap",
+          justifyContent: "space-between",
+          rowGap: spacing.sm,
+        }}
+      >
+        {stats.map((stat) => (
+          <StatTile key={stat.label} {...stat} />
         ))}
       </Animated.View>
 
-      {/* ── Focus Timer ───────────────────────────────────────── */}
-      <SectionLabel title="Focus Timer" delay={100} />
-      <Animated.View entering={FadeInDown.delay(100).duration(300)}>
+      <SectionLabel title="Focus Studio" delay={90} />
+      <Animated.View entering={FadeInDown.delay(90).duration(300)}>
         <View
           style={{
             backgroundColor: colors.surface,
-            borderRadius: radius.md,
+            borderRadius: radius.lg,
             borderCurve: "continuous",
-            padding: spacing.lg,
+            paddingHorizontal: spacing.lg,
+            borderWidth: 1,
+            borderColor: colors.borderLight,
+            boxShadow: "0 4px 20px rgba(0,0,0,0.06)",
           }}
         >
-          {/* Focus Duration */}
-          <View style={{ marginBottom: spacing.lg }}>
-            <View
-              style={{
-                flexDirection: "row",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: spacing.sm,
-              }}
-            >
-              <Text style={{ ...font.subhead, color: colors.textPrimary }}>
-                Focus Duration
-              </Text>
-              <Text
-                selectable
-                style={{
-                  ...font.subhead,
-                  fontWeight: "600",
-                  color: colors.primary,
-                  fontVariant: ["tabular-nums"],
-                }}
-              >
-                {timerStore.focusDuration} min
-              </Text>
-            </View>
-            <Slider
-              minimumValue={5}
-              maximumValue={60}
-              step={5}
-              value={timerStore.focusDuration}
-              onValueChange={(v) => timerStore.setFocusDuration(v)}
-              minimumTrackTintColor={colors.primary}
-              maximumTrackTintColor={colors.borderLight}
-              thumbTintColor={colors.primary}
-            />
-          </View>
+          <SliderPanel
+            title="Focus Duration"
+            subtitle="Main deep-work session"
+            icon="timer"
+            tint={colors.primary}
+            valueLabel={`${timerStore.focusDuration} min`}
+            min={5}
+            max={60}
+            step={5}
+            value={timerStore.focusDuration}
+            onValueChange={(v) => timerStore.setFocusDuration(v)}
+          />
 
-          {/* Break Duration */}
-          <View>
-            <View
-              style={{
-                flexDirection: "row",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: spacing.sm,
-              }}
-            >
-              <Text style={{ ...font.subhead, color: colors.textPrimary }}>
-                Break Duration
-              </Text>
-              <Text
-                selectable
-                style={{
-                  ...font.subhead,
-                  fontWeight: "600",
-                  color: colors.success,
-                  fontVariant: ["tabular-nums"],
-                }}
-              >
-                {timerStore.breakDuration} min
-              </Text>
-            </View>
-            <Slider
-              minimumValue={1}
-              maximumValue={30}
-              step={1}
-              value={timerStore.breakDuration}
-              onValueChange={(v) => timerStore.setBreakDuration(v)}
-              minimumTrackTintColor={colors.success}
-              maximumTrackTintColor={colors.borderLight}
-              thumbTintColor={colors.success}
-            />
-          </View>
+          <View style={{ height: 1, backgroundColor: colors.borderLight }} />
+
+          <SliderPanel
+            title="Break Duration"
+            subtitle="Recovery between sessions"
+            icon="leaf.fill"
+            tint={colors.success}
+            valueLabel={`${timerStore.breakDuration} min`}
+            min={1}
+            max={30}
+            step={1}
+            value={timerStore.breakDuration}
+            onValueChange={(v) => timerStore.setBreakDuration(v)}
+          />
         </View>
       </Animated.View>
 
-      {/* ── Goals ─────────────────────────────────────────────── */}
-      <SectionLabel title="Goals" delay={150} />
+      <SectionLabel title="Goals & Limits" delay={120} />
+      <Animated.View entering={FadeInDown.delay(120).duration(300)}>
+        <View
+          style={{
+            backgroundColor: colors.surface,
+            borderRadius: radius.lg,
+            borderCurve: "continuous",
+            paddingHorizontal: spacing.lg,
+            borderWidth: 1,
+            borderColor: colors.borderLight,
+            boxShadow: "0 4px 20px rgba(0,0,0,0.06)",
+          }}
+        >
+          <SliderPanel
+            title="Daily Study Goal"
+            subtitle="How many hours per day"
+            icon="calendar.badge.clock"
+            tint={colors.warning}
+            valueLabel={`${studyHoursPerDay.toFixed(1)} hrs`}
+            min={1}
+            max={12}
+            step={0.5}
+            value={studyHoursPerDay}
+            onValueChange={handleStudyHoursPreview}
+            onSlidingComplete={handleStudyHoursCommit}
+          />
+
+          <View style={{ height: 1, backgroundColor: colors.borderLight }} />
+
+          <SliderPanel
+            title="Weekly Budget"
+            subtitle="Spending cap for this week"
+            icon="creditcard.fill"
+            tint={colors.success}
+            valueLabel={`$${weeklyBudget}`}
+            min={20}
+            max={500}
+            step={5}
+            value={weeklyBudget}
+            onValueChange={handleWeeklyBudgetPreview}
+            onSlidingComplete={handleWeeklyBudgetCommit}
+          />
+        </View>
+      </Animated.View>
+
+      <SectionLabel title="Data & Safety" delay={150} />
       <Animated.View entering={FadeInDown.delay(150).duration(300)}>
         <View
           style={{
-            backgroundColor: colors.surface,
-            borderRadius: radius.md,
+            borderRadius: radius.lg,
             borderCurve: "continuous",
-            padding: spacing.lg,
+            overflow: "hidden",
+            borderWidth: 1,
+            borderColor: colors.borderLight,
+            boxShadow: "0 4px 20px rgba(0,0,0,0.05)",
           }}
         >
-          {/* Daily study goal */}
-          <View style={{ marginBottom: spacing.lg }}>
-            <View
-              style={{
-                flexDirection: "row",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: spacing.sm,
-              }}
-            >
-              <Text style={{ ...font.subhead, color: colors.textPrimary }}>
-                Daily Study Goal
-              </Text>
-              <Text
-                selectable
-                style={{
-                  ...font.subhead,
-                  fontWeight: "600",
-                  color: colors.warning,
-                  fontVariant: ["tabular-nums"],
-                }}
-              >
-                {studyHoursPerDay.toFixed(1)} hrs
-              </Text>
-            </View>
-            <Slider
-              minimumValue={1}
-              maximumValue={12}
-              step={0.5}
-              value={studyHoursPerDay}
-              onValueChange={handleStudyHoursChange}
-              minimumTrackTintColor={colors.warning}
-              maximumTrackTintColor={colors.borderLight}
-              thumbTintColor={colors.warning}
-            />
-          </View>
-
-          {/* Weekly budget */}
-          <View>
-            <View
-              style={{
-                flexDirection: "row",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: spacing.sm,
-              }}
-            >
-              <Text style={{ ...font.subhead, color: colors.textPrimary }}>
-                Weekly Budget
-              </Text>
-              <Text
-                selectable
-                style={{
-                  ...font.subhead,
-                  fontWeight: "600",
-                  color: colors.success,
-                  fontVariant: ["tabular-nums"],
-                }}
-              >
-                ${weeklyBudget}
-              </Text>
-            </View>
-            <Slider
-              minimumValue={20}
-              maximumValue={500}
-              step={5}
-              value={weeklyBudget}
-              onValueChange={handleWeeklyBudgetChange}
-              minimumTrackTintColor={colors.success}
-              maximumTrackTintColor={colors.borderLight}
-              thumbTintColor={colors.success}
-            />
-          </View>
-        </View>
-      </Animated.View>
-
-      {/* ── Data ──────────────────────────────────────────────── */}
-      <SectionLabel title="Data" delay={200} />
-      <Animated.View entering={FadeInDown.delay(200).duration(300)}>
-        <View style={{ borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden" }}>
-          <Cell
+          <SettingCell
             icon="arrow.counterclockwise"
             iconColor="#FFFFFF"
             iconBg={colors.warning}
             label="Reset Study Streak"
+            subtitle="Set your current streak back to zero"
             value={`${currentStreak}d`}
             onPress={handleResetStreak}
             isFirst
           />
-          <Cell
+          <SettingCell
             icon="trash"
             iconColor="#FFFFFF"
             iconBg={colors.textSecondary}
             label="Clear Completed Tasks"
+            subtitle="Remove only finished items from planner"
             value={`${totalTasks} tasks`}
             onPress={handleClearCompletedTasks}
             isLast
@@ -696,43 +786,70 @@ export default function SettingsScreen() {
         </View>
       </Animated.View>
 
-      {/* ── Account ───────────────────────────────────────────── */}
-      <SectionLabel title="Account" delay={250} />
-      <Animated.View entering={FadeInDown.delay(250).duration(300)}>
-        <View style={{ borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden" }}>
-          <Cell
+      <SectionLabel title="Account" delay={180} />
+      <Animated.View entering={FadeInDown.delay(180).duration(300)}>
+        <View
+          style={{
+            borderRadius: radius.lg,
+            borderCurve: "continuous",
+            overflow: "hidden",
+            borderWidth: 1,
+            borderColor: colors.borderLight,
+            boxShadow: "0 4px 20px rgba(0,0,0,0.05)",
+          }}
+        >
+          <SettingCell
             icon="envelope.fill"
             iconColor="#FFFFFF"
             iconBg={colors.primary}
             label="Email"
+            subtitle="Your login address"
             value={userEmail}
             isFirst
-          />
-          <Cell
-            icon="rectangle.portrait.and.arrow.right"
-            iconColor="#FFFFFF"
-            iconBg={colors.danger}
-            label="Sign Out"
-            onPress={handleSignOut}
-            isDestructive
             isLast
           />
         </View>
+
+        <Pressable
+          onPress={handleSignOut}
+          accessibilityRole="button"
+          accessibilityLabel="Sign out"
+          style={({ pressed }) => ({
+            marginTop: spacing.md,
+            backgroundColor: colors.surface,
+            borderRadius: radius.md,
+            borderCurve: "continuous",
+            borderWidth: 1,
+            borderColor: `${colors.danger}50`,
+            paddingVertical: spacing.md,
+            alignItems: "center",
+            justifyContent: "center",
+            opacity: pressed ? 0.75 : 1,
+          })}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <SymbolView name="rectangle.portrait.and.arrow.right" size={16} tintColor={colors.danger} />
+            <Text
+              style={{
+                ...font.subhead,
+                color: colors.danger,
+                fontWeight: "600",
+                fontFamily: settingsFonts.heading,
+              }}
+            >
+              Sign Out
+            </Text>
+          </View>
+        </Pressable>
       </Animated.View>
 
-      {/* ── Footer ────────────────────────────────────────────── */}
-      <Animated.View entering={FadeInDown.delay(300).duration(300)}>
-        <View
-          style={{
-            alignItems: "center",
-            paddingVertical: spacing.xxl,
-          }}
-        >
+      <Animated.View entering={FadeInDown.delay(210).duration(300)}>
+        <View style={{ alignItems: "center", paddingVertical: spacing.xxl }}>
           <Text
             style={{
               ...font.footnote,
               color: colors.textTertiary,
-              fontWeight: "500",
+              fontFamily: settingsFonts.heading,
             }}
           >
             Studia
@@ -744,6 +861,7 @@ export default function SettingsScreen() {
               color: colors.textTertiary,
               marginTop: 4,
               fontVariant: ["tabular-nums"],
+              fontFamily: settingsFonts.body,
             }}
           >
             Version {APP_VERSION}

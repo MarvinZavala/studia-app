@@ -66,6 +66,26 @@ eas build --platform ios --profile production
 eas build --platform android --profile preview
 ```
 
+### Validation
+
+```bash
+# Typecheck + Expo health checks
+npm run validate
+
+# CI-equivalent local check
+npm run ci
+```
+
+### Database Hardening (Supabase)
+
+Phase 2 introduces a baseline migration with RLS policies and performance indexes:
+
+```text
+supabase/migrations/20260219_phase2_hardening.sql
+```
+
+Apply this SQL in your Supabase project before production rollout.
+
 ## Project Structure
 
 ```
@@ -77,7 +97,10 @@ app/                  # Expo Router screens
   (budget)/           # Budget tracking
   (settings)/         # App settings
 components/ui/        # Reusable UI components
+components/settings/  # Settings UI building blocks
 lib/                  # Core logic
+  data/               # Centralized API access layer
+  features/           # Feature hooks/domain logic
   hooks/              # Custom React hooks
   stores/             # Zustand stores
   storage/            # Local DB & seed data
